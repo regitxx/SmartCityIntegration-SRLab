@@ -57,10 +57,16 @@ This plan breaks the system into phased, shippable spikes. Each phase has a demo
   - `transport.plan_multimodal_route` — backed by a locally deployed **OpenTripPlanner 2** with today's HK GTFS. (`otp.jar` as a sidecar process, not in-process.)
   - `meta.ask_user`
 - FastAPI `/ws/:session_id` WebSocket emitting `tool_call.*` + `token` + `final` events.
-- Minimal browser chat UI: a single static page (HTMX or vanilla JS) that connects to `/ws/:session_id`, displays the tool trace in a sidebar, and shows final text in the main pane. Simple but lets the user see exactly what the agent is doing.
+- Minimal browser chat UI: single static page (vanilla JS + WebSocket), two-pane layout (dialogue + tool trace), styled per `docs/architecture/UI_STYLE.md` ("archive underground" aesthetic — monospace, near-black surface, single amber accent, no chat bubbles, source footers on every agent reply).
 - Observability: OpenLLMetry SDK wrapping the OpenAI client; Langfuse optional at this phase (stand up in Phase 2).
 
-**Golden set v0.1:** 30 queries covering — minimum — Cantonese (8), Mandarin 繁體 (4), Mandarin 简体 (4), English (4), Japanese (2), Korean (2), French or German (2), Thai or Tagalog or Indonesian or Vietnamese (2), plus at least 4 Canto-English code-switched queries. 10 are multi-turn (disambiguation). 4 stress vague-intent disambiguation.
+**Golden set v0.1 — 30 queries, two buckets.** Covers both the *native* data.gov.hk language path (EN / 繁體 / 简体) and the *translation-fallback* path (every other language + Cantonese, which data.gov.hk does not natively serve).
+
+- **Native path (18):** Cantonese 6 (proves fallback works for our priority language) · Mandarin 繁體 4 · Mandarin 简体 4 · English 4.
+- **Fallback path (12):** Japanese 2 · Korean 2 · French or German 2 · Thai or Tagalog 2 · Indonesian or Vietnamese 2 · Cantonese-English code-switch 2.
+- 10 are multi-turn (disambiguation). 4 stress vague-intent disambiguation.
+
+Every golden query carries an expected `upstream_lang` field and `translation_applied` boolean so the response-footer transparency test runs on every case.
 
 **Acceptance:**
 - `just eval` reports ≥ 80% TSR across **all languages in the set** (not just EN/繁體), ≥ 0.80 Slot F1, median latency ≤ 2.0 s (we target 1.5 s but allow slack until Phase 4 micro-opts).

@@ -4,15 +4,15 @@ Numbers match the questions from the kickoff conversation. I'll keep my preferre
 
 ### Blockers for Phase 0
 
-- **Q1 · Git repo URL.** You said one is created — share the remote so the scaffold lands on main. *Default if silent:* stay local-only; wire remote later.
-- **Q5 · Tailscale exposure.** Tailscale Serve (internal HTTPS) vs Funnel (public). *Default:* Serve-only.
-- **Q11 · PII posture.** v0 public-info only vs any user PII? *Default:* public-info only; PII redaction at ingress; `meta.forget_me` tool.
+- **Q1 · Git repo URL.** ✅ **ANSWERED 2026-04-21.** https://github.com/regitxx/SmartCityIntegration-SRLab — docs pushed to `main`.
+- **Q5 · Tailscale exposure.** ✅ **ANSWERED 2026-04-21.** Using the Earnest Design Lab tailnet. Default Serve-only (internal HTTPS, no Funnel) unless user flips it on.
+- **Q11 · PII posture.** v0 public-info only vs any user PII? *Default:* public-info only; PII redaction at ingress; `meta.forget_me` tool. **Proceeding on default.**
 
 ### Blockers for Phase 1 acceptance
 
-- **Q4 · Chat UI.** Minimal FastAPI + vanilla JS with tool trace / Next.js+AI SDK / bring-your-own. *Default:* minimal FastAPI + vanilla JS in v0; clean service API underneath so your lab's future UI plugs in.
-- **Q7 · Location grounding from the platform.** Does the robotics layer push current lat/lng into every request, or do users type? *Default:* user-types in v0; wire a `context.user_location` slot the platform can fill later.
-- **Q12 · Golden evaluation set.** You or the lab provide 20 golden queries, or I seed it and you approve? *Default:* I draft 20 (6 Cantonese, 6 繁體, 4 EN, 4 code-switched); you stamp.
+- **Q4 · Chat UI.** ✅ **ANSWERED 2026-04-21.** Minimal FastAPI + vanilla JS + WebSocket + SSE, styled in an **"archive underground"** aesthetic (see `docs/architecture/UI_STYLE.md`).
+- **Q7 · Location grounding from the platform.** ✅ **ANSWERED 2026-04-21.** v0 is user-types-in-chat. No robot GPS push. `context.user_location` slot is still reserved for when the lab platform wires in later.
+- **Q12 · Golden evaluation set — languages.** 🔶 **CLARIFIED 2026-04-21.** data.gov.hk natively serves almost exclusively **EN + 繁體 + 简体** per dataset (rare exceptions on tourism datasets). True "100% coverage" in our agent = native path (EN/繁體/简体) + translation-fallback path for everything else (including Cantonese — not natively supported by data.gov.hk). Golden set v0.1 = 30 queries split **18 native-path + 12 fallback-path** across ≥ 10 languages. I'll draft; user stamps. *Awaiting final ack — user can still tell me to drop the 12 fallback-path queries to Phase 2 if they want a tighter v0.1.*
 
 ### Important but deferrable
 
