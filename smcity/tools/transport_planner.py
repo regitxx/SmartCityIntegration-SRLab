@@ -415,13 +415,16 @@ PLAN_SIMPLE_ROUTE_TOOL: ToolSpec[PlanSimpleRouteArgs, PlanSimpleRouteResult] = T
     name="transport.plan_simple_route",
     description_en=(
         "Plan a walk + MTR + walk journey between two points in Hong Kong. "
-        "PRECONDITION: only call this AFTER the user has explicitly chosen MTR "
-        "(or said 地鐵 / 港鐵). If the user only asked 'how do I get from X to "
-        "Y?' without a mode, call meta.ask_user first — do NOT default to MTR. "
-        "Inputs: explicit station names/codes OR (lat, lng) for origin and "
-        "destination (mix allowed). Returns legs (walk / board / ride / "
-        "transfer / alight) plus total travel time. For bus/minibus/tram "
-        "routing, call the specific operator tools instead."
+        "MTR-ONLY. Do not call for walking, bus, minibus, taxi, or ferry — "
+        "those have their own tools or get conversational answers. "
+        "PRECONDITION: the user has explicitly chosen MTR (or 地鐵 / 港鐵). "
+        "If they only asked 'how do I get from X to Y?' without a mode, call "
+        "meta.ask_user first. "
+        "Args are STRICT — use the named fields (NOT generic 'origin' / "
+        "'destination' / 'mode' strings). Pick ONE of: "
+        "(origin_station + destination_station), or "
+        "(origin_lat + origin_lng + destination_lat + destination_lng), or a "
+        "mix. `preferred_mode` must be 'mtr' (the default)."
     ),
     args_schema=PlanSimpleRouteArgs,
     result_schema=PlanSimpleRouteResult,

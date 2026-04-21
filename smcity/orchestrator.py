@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -162,6 +163,7 @@ class Orchestrator:
             )
             reply_text = await self._stream_final(messages, req.session_id, _emit)
             reply_text = _maybe_polish(reply_text, detection)
+            reply_text = _rewrite_source_footer(reply_text, citations)
 
             slots.append_turn(req.text, reply_text)
             await self._store.save(slots)
@@ -187,6 +189,7 @@ class Orchestrator:
                 tools=self._registry.openai_schemas(),
                 parallel_tool_calls=True,
                 session_id=req.session_id,
+                known_tool_names=set(self._registry.names()),
             )
         except LLMError as err:
             reply_text = "(LM Studio unreachable — check Tailscale and the Mac Studio)"
@@ -250,8 +253,7 @@ class Orchestrator:
             reply_text = first.text or "(empty reply)"
             reply_text = _maybe_polish(reply_text, detection)
 
-        if clarification:
-            reply_text = clarification
+        reply_text = clarification or _rewrite_source_footer(reply_text, citations)
 
         slots.append_turn(req.text, reply_text)
         await self._store.save(slots)
@@ -299,11 +301,21 @@ class Orchestrator:
         session_id: str,
         emit: EventEmitter,
     ) -> str:
-        """Run the synthesis LLM call in streaming mode, emitting tokens live."""
+        """Run the synthesis LLM call in streaming mode, emitting tokens live.
+
+        Returns the cleaned final text, falling back to a retry (with a
+        stronger "produce prose, not tool calls" reminder) if the synthesis
+        collapsed into a tool-call-only leak.
+        """
         buf: list[str] = []
         first_token_at: float | None = None
+        final_text: str | None = None
         try:
-            async for event in chat_stream(messages, session_id=session_id):
+            async for event in chat_stream(
+                messages,
+                session_id=session_id,
+                known_tool_names=set(self._registry.names()),
+            ):
                 if event.kind == "token" and event.text:
                     if first_token_at is None:
                         first_token_at = time.perf_counter()
@@ -311,11 +323,33 @@ class Orchestrator:
                     buf.append(event.text)
                     emit(TurnEvent(type="turn.token", data={"text": event.text}))
                 elif event.kind == "final":
-                    if not buf and event.text:
-                        buf.append(event.text)
+                    final_text = event.text
         except LLMError as err:
             buf.append(f" (synthesis error: {err})")
-        return "".join(buf) or "(empty reply)"
+
+        text = (final_text or "").strip()
+        if text:
+            return text
+
+        # Synthesis collapsed (harmony/bare leaks stripped everything). Retry
+        # once with a strong reminder to produce prose and no more tool calls.
+        retry_messages = [
+            *messages,
+            {
+                "role": "system",
+                "content": (
+                    "STOP CALLING TOOLS. Produce a short natural-language "
+                    "reply (2-4 sentences) in the user's language using ONLY "
+                    "the tool results already above. Do not emit any function "
+                    "names, JSON, or harmony tokens."
+                ),
+            },
+        ]
+        try:
+            retry = await chat(retry_messages, session_id=session_id)
+            return (retry.text or "").strip() or "(I couldn't compose an answer — try rephrasing?)"
+        except LLMError:
+            return "(I couldn't compose an answer — try rephrasing?)"
 
     async def _run_parallel(
         self,
@@ -448,6 +482,29 @@ def _maybe_polish(text: str, detection: LangDetection) -> str:
     if detection.primary_lang != "yue":
         return text
     return polish_cantonese(text)
+
+
+_SRC_LINE_RE = re.compile(r"(?im)^\s*src\s*[:：][^\n]*\n?")  # noqa: RUF001
+
+
+def _rewrite_source_footer(text: str, citations: list[Citation]) -> str:
+    """Strip any LLM-invented `src: …` line and append a deterministic one
+    built from the actual citations list (so it can't be hallucinated)."""
+    if not text:
+        return text
+    cleaned = _SRC_LINE_RE.sub("", text).rstrip()
+    if not citations:
+        return cleaned
+    # "transport.plan_simple_route" → "plan_simple_route"
+    short = [c.tool.split(".", 1)[-1] for c in citations]
+    seen: set[str] = set()
+    dedup: list[str] = []
+    for name in short:
+        if name in seen:
+            continue
+        seen.add(name)
+        dedup.append(name)
+    return f"{cleaned}\n\nsrc: {' / '.join(dedup)}"
 
 
 def _localise_chitchat(canned: str, d: LangDetection) -> str:

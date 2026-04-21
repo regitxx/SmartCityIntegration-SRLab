@@ -53,13 +53,34 @@ def _harmony_fn_to_tool(name: str, known_names: set[str] | None = None) -> str:
     return name
 
 
+def _bare_leak_pattern(known_tool_names: set[str]) -> re.Pattern[str] | None:
+    """Match 'TOOL_NAME json {json-object}' leaks where TOOL_NAME is any
+    registered tool in its underscored form. Gated by the known-names set so
+    we don't false-positive on prose."""
+    if not known_tool_names:
+        return None
+    underscored = [n.replace(".", "_") for n in known_tool_names]
+    alternatives = "|".join(re.escape(n) for n in sorted(underscored, key=len, reverse=True))
+    # `TOOL_NAME` (opt. whitespace / punctuation) (opt. "json") (opt. whitespace)
+    # `{ ... }` — minimal brace-balanced JSON (up to the first matching `}`).
+    # We use a non-greedy match up to `}` and require the open brace to be an
+    # object; arrays aren't valid tool-call args in our schema.
+    return re.compile(
+        rf"\b({alternatives})\b[^\w{{]*(?:json)?[\s:]*(\{{.*?\}})",
+        re.DOTALL,
+    )
+
+
 def extract_harmony_tool_calls(
     text: str, *, known_tool_names: set[str] | None = None
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Scan `text` for harmony-format tool-call leaks. Returns a cleaned text
-    (with the harmony blocks and any stray harmony tokens stripped) plus a list
-    of `{id,name,arguments}` dicts in the order they appeared."""
+    """Scan `text` for tool-call leaks in either the canonical harmony format
+    OR the bare `TOOL_NAME json {...}` format. Returns a cleaned text (with
+    leaked blocks stripped) plus a list of `{id,name,arguments}` dicts."""
     calls: list[dict[str, Any]] = []
+
+    # 1) Canonical harmony format with <|...|> tokens.
+    cleaned = text
     for i, m in enumerate(_HARMONY_TOOLCALL_RE.finditer(text)):
         fn_raw = m.group(1)
         args_json = m.group(2).strip()
@@ -70,8 +91,26 @@ def extract_harmony_tool_calls(
                 "arguments": args_json,
             }
         )
-    cleaned = _HARMONY_TOOLCALL_RE.sub("", text)
-    # Strip any stray `<|…|>` tokens that sneaked through.
+    cleaned = _HARMONY_TOOLCALL_RE.sub("", cleaned)
+
+    # 2) Bare `TOOL_NAME json {...}` leak — requires a known-names gate so we
+    # don't devour prose that happens to contain a brace.
+    if known_tool_names:
+        bare = _bare_leak_pattern(known_tool_names)
+        if bare is not None:
+            for m in bare.finditer(cleaned):
+                fn_raw = m.group(1)
+                args_json = m.group(2).strip()
+                calls.append(
+                    {
+                        "id": f"bare-{len(calls)}",
+                        "name": _harmony_fn_to_tool(fn_raw, known_tool_names),
+                        "arguments": args_json,
+                    }
+                )
+            cleaned = bare.sub("", cleaned)
+
+    # 3) Strip any stray `<|…|>` tokens.
     cleaned = _HARMONY_TOKEN_RE.sub("", cleaned).strip()
     return cleaned, calls
 
@@ -153,8 +192,13 @@ async def chat(
     temperature: float = 0.0,
     parallel_tool_calls: bool = True,
     session_id: str | None = None,
+    known_tool_names: set[str] | None = None,
 ) -> LLMReply:
-    """One-shot chat against LM Studio."""
+    """One-shot chat against LM Studio.
+
+    `known_tool_names` enables bare-leak recovery (catches cases like
+    `transport_plan_simple_route json {...}` being emitted as raw text).
+    """
     started = time.perf_counter()
     kwargs = _build_kwargs(
         messages,
@@ -181,7 +225,7 @@ async def chat(
     ]
     raw_text = choice.message.content or ""
     # Recover harmony-format tool calls that LM Studio failed to parse.
-    text, leaked = extract_harmony_tool_calls(raw_text)
+    text, leaked = extract_harmony_tool_calls(raw_text, known_tool_names=known_tool_names)
     if leaked and not tool_calls:
         tool_calls = leaked
     usage = resp.usage.model_dump() if resp.usage else {}
@@ -201,6 +245,7 @@ async def chat_stream(
     temperature: float = 0.0,
     parallel_tool_calls: bool = True,
     session_id: str | None = None,
+    known_tool_names: set[str] | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """Stream tokens + tool-call deltas from LM Studio.
 
@@ -256,7 +301,7 @@ async def chat_stream(
 
     tool_calls = [tool_accum[i] for i in sorted(tool_accum)]
     raw_text = "".join(full_text)
-    text, leaked = extract_harmony_tool_calls(raw_text)
+    text, leaked = extract_harmony_tool_calls(raw_text, known_tool_names=known_tool_names)
     if leaked and not tool_calls:
         tool_calls = leaked
     yield StreamEvent(
