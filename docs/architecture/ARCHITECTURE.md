@@ -11,7 +11,7 @@
 | Goal (from `docs/GOAL.md`) | Architectural consequence |
 |---|---|
 | Conversational latency (p50 ≤ 1.5 s) | One LLM hop per turn; parallel tool calls; KV-cache warm; avoid planner LLM on the hot path. |
-| Cantonese first, multilingual second | Dedicated language router + Cantonese post-processor, separate from the reasoning LLM. |
+| 100% language coverage from v0 (Cantonese is priority, not exclusive scope) | Language router handles all 176 fastText languages from day 1; translation fallback at the tool boundary covers every non-CJK language; a dedicated Cantonese post-processor adds natural-register output for the priority language without descoping anything else. |
 | Every external read is a tool call | Strict tool registry with pydantic schemas; no free-form HTTP from the LLM. |
 | Session memory | In-process slot state + SQLite WAL checkpoint per session, PII-redacted at ingress. |
 | Integration-ready for a future robotics platform | Transport-agnostic agent service (WebSocket / SSE / REST); hardware layer never touches LLM internals. |
@@ -116,10 +116,13 @@ Tool list source-of-truth lives in `docs/architecture/TOOL_CATALOG.md`.
 ### 3.3 Language router — contract
 
 Input: raw user text + optional carried locale.
+
+**Scope:** handles **all 176 languages** covered by fastText lid.176, not just HK-priority three. The priority ranking (yue > zho > eng > *) only determines which languages get extra polish layers (Cantonese post-processor, HKU benchmark gate, TTS locale passthrough) — every supported language is routed and answered in v0. Languages not natively supported by a given dataset go through the translation-fallback layer at the tool boundary; the response formatter transparently reports the translation step.
+
 Output:
 ```python
 class LangDetection(BaseModel):
-    primary_lang: Literal["yue","zho","eng","jpn","kor","fra","deu","spa","tha","fil","ind","vie","...other"]
+    primary_lang: str  # any ISO 639-1/3 code from fastText lid.176; priority set: yue, zho, eng, jpn, kor, fra, deu, spa, tha, fil, ind, vie
     script: Literal["Hant","Hans","Latin","Mixed","Other"]
     is_code_switched: bool
     code_switch_langs: list[str]
@@ -133,7 +136,7 @@ Rules:
 2. fastText → if non-Chinese and confidence > 0.9, return.
 3. HIT-TMG/LID-HK transformer → authoritative decision for anything remaining.
 4. CLD3 → only invoked when transformer returns `zho` and script field is ambiguous.
-5. If all gates uncertain → ask the user in EN + 繁體 which language they prefer and persist on the session.
+5. If all gates uncertain → ask the user which language they prefer. Ask in the session's last known locale if any; otherwise ask trilingually (繁體 + English + 简体) as the broadest HK-appropriate default. Persist the answer on the session.
 
 ### 3.4 Slot-filling state machine — contract
 

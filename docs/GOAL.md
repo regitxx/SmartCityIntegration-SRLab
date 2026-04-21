@@ -17,7 +17,7 @@ An agentic chat system that answers Hong Kong smart-city questions (transportati
 
 ## Non-negotiables
 
-- **Language priority:** Cantonese (廣東話) > Mandarin (普通話, Simplified + Traditional) > English > every other language supported by data.gov.hk. The system must transparently surface which languages each data source supports, and warn the user when their chosen language isn't covered.
+- **Language coverage = 100% from v0.** The system accepts and responds in any language. Priority ranking is Cantonese (廣東話) > Mandarin (普通話, Simplified + Traditional) > English > every other language a user might use. "Priority" means Cantonese gets the natural-register post-processor, the HKU Cantonese-benchmark gate, and a dedicated TTS locale passthrough — **it does not mean other languages are descoped.** Languages that data.gov.hk doesn't natively serve (most non-CJK) are handled via a translation layer at the tool boundary: `user_lang → {繁體 or EN based on dataset} → fetch → translate back to user_lang`. The system transparently surfaces, on every response, which languages the upstream source actually supported and whether translation was applied.
 - **Agentic tool calling:** every data access is a tool call with strict JSON-schema-validated arguments. No hallucinated bus stops, no invented ETAs.
 - **Session memory:** multi-turn dialog within a session retains slots (origin, destination, mode preference, locale) and follow-ups reuse them.
 - **Fast:** conversational latency budget ≤ ~1.5 s per turn for cached intents, ≤ ~3 s for fresh tool fan-outs. Sub-second disambiguation questions.
@@ -35,6 +35,7 @@ An agentic chat system that answers Hong Kong smart-city questions (transportati
 
 - Answer 20 representative HK transport questions with ≥ 90% factual accuracy verified against data.gov.hk.
 - Handle Cantonese input at ≥ 95% language-detection accuracy.
+- Handle **at least 8 other languages** (Mandarin 简/繁, English, Japanese, Korean, French, German, Spanish, Thai, Tagalog, Indonesian, Vietnamese — HK tourist + resident languages) end-to-end via translation fallback with correct source-language transparency note.
 - Median turn latency ≤ 1.5 s, p95 ≤ 3 s on current Mac Studio.
 - Full transcript-level audit log of every tool call + arguments + response.
 

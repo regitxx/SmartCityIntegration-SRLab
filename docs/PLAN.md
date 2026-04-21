@@ -38,12 +38,15 @@ This plan breaks the system into phased, shippable spikes. Each phase has a demo
 
 ---
 
-## Phase 1 — MVP Transport Agent, EN + 繁體 (≈ 5 days)
+## Phase 1 — MVP Transport Agent, ALL languages (≈ 5 days)
 
-**Goal:** Answer the hero scenario "I'm in Sheung Wan, how do I get to Sha Tin?" end-to-end, in English and Traditional Chinese, with real data.gov.hk calls.
+**Goal:** Answer the hero scenario "I'm in Sheung Wan, how do I get to Sha Tin?" end-to-end in **any language the user types**, with real data.gov.hk calls. Cantonese, Mandarin (简/繁) and English are fully native; any other language works via the translation-fallback layer at the tool boundary. The agent explicitly states in every reply which languages the upstream source supported and whether translation was applied.
 
 **Components:**
-- Language router v1: particle-heuristic + fastText, no transformer yet. 繁體 treated as 繁體; 简体 converted to 繁體 HK via OpenCC `s2hk`.
+- Language router v1: particle heuristic (Cantonese detector) + fastText lid.176 (covers 176 languages → primary language routing from day 1) + CLD3 for 繁/简 disambiguation. HIT-TMG/LID-HK transformer is upgraded in Phase 2, but the 176-language fastText coverage means **every language is routed correctly in v0** — just with less HK-specific accuracy for code-switched cases.
+- Script normaliser: OpenCC `s2hk` (Simp→HK Traditional) + `hk2s` (HK Traditional→Simp for datasets that only accept Simp).
+- **Translation fallback at the tool boundary** (v0): self-hosted NLLB-200 or equivalent. The agent translates the user's query into `繁體` (or `EN` if the dataset only supports English) before calling the tool, and translates the source response back into the user's language. Quality is "good enough to ship" in v0; Phase 2 upgrades Cantonese surface form and adds Jyutping input.
+- Dataset language-coverage matrix loaded as data (from `docs/research/01_*.md` and `02_*.md`) so the agent can truthfully report "MTR supports EN+繁體, I translated your Korean query" in the response footer.
 - Session store (SQLite WAL + msgspec) with the `SessionSlots` model from the architecture doc.
 - Slot-filling state machine with `clarify_vs_guess` logic.
 - Tool registry with the 13 v0 tools listed in `TOOL_CATALOG.md`.
@@ -57,34 +60,40 @@ This plan breaks the system into phased, shippable spikes. Each phase has a demo
 - Minimal browser chat UI: a single static page (HTMX or vanilla JS) that connects to `/ws/:session_id`, displays the tool trace in a sidebar, and shows final text in the main pane. Simple but lets the user see exactly what the agent is doing.
 - Observability: OpenLLMetry SDK wrapping the OpenAI client; Langfuse optional at this phase (stand up in Phase 2).
 
-**Golden set v0.1:** 20 queries in EN + 繁體, 10 of which are multi-turn ("how do I get from X to Y?" → clarification → final answer). At least 4 must intentionally stress disambiguation.
+**Golden set v0.1:** 30 queries covering — minimum — Cantonese (8), Mandarin 繁體 (4), Mandarin 简体 (4), English (4), Japanese (2), Korean (2), French or German (2), Thai or Tagalog or Indonesian or Vietnamese (2), plus at least 4 Canto-English code-switched queries. 10 are multi-turn (disambiguation). 4 stress vague-intent disambiguation.
 
 **Acceptance:**
-- `just eval` reports ≥ 80% TSR, ≥ 0.80 Slot F1, median latency ≤ 2.0 s (we target 1.5 s but allow slack until Phase 4 micro-opts).
-- The hero scenario works end-to-end in Cantonese-particle and 繁體 inputs (even though the LLM may reply in formal 繁體 — fine for this phase).
+- `just eval` reports ≥ 80% TSR across **all languages in the set** (not just EN/繁體), ≥ 0.80 Slot F1, median latency ≤ 2.0 s (we target 1.5 s but allow slack until Phase 4 micro-opts).
+- The hero scenario works end-to-end in Cantonese, Mandarin, English, and at least one non-CJK language via translation fallback.
+- The response footer truthfully reports the upstream dataset's supported languages + whether translation was applied (tested on every golden-set query).
 - No hallucinated stop IDs (enforced by the entity-linker post-check).
+- Cantonese in = Cantonese out (even if surface form is formal 繁體 — Phase 2 polishes register). No Cantonese query gets answered in English or Mandarin by mistake.
 
 **What I need from you before finishing:** confirmation on chat-UI style (Q4); confirmation that location grounding (Q7) is manual in v0 — i.e. the user types origin until the platform pushes GPS.
 
 ---
 
-## Phase 2 — Cantonese polish + Context signals (≈ 4 days)
+## Phase 2 — Cantonese register polish + expanded MT + Context signals (≈ 4 days)
 
-**Goal:** Make Cantonese the first-class input language with natural-register Cantonese output, and fold weather / AQI / warnings into answers.
+**Goal:** Upgrade Cantonese from "detected and answered" (done in Phase 1) to "natural-register output that a HK reviewer would actually say". Expand translation-fallback quality for the non-priority languages. Fold weather / AQI / warnings into answers.
+
+Phase 2 is a **quality upgrade**, not a scope expansion — Phase 1 already handles all languages. What changes here: Cantonese surface form reads like real HK Cantonese (particles, syntax, not formal 繁體), and non-CJK translations are crisp enough to ship with confidence.
 
 **Components:**
-- Language router v2: add HIT-TMG/LID-HK transformer + CLD3 for script disambiguation. Ensemble rule (particle → fastText → transformer).
-- Cantonese post-processor: load Qwen2.5-7B-Instruct (or YueLLM-7B) on the Mac Studio as a second LM Studio slot; invoke only when `primary_lang == "yue"` and the main LLM replied in formal 繁體. Prompted with Cantonese style exemplars. (Pros/cons of running a second model resident: memory trade vs response quality — see `03_*.md`.)
+- Language router v2: add HIT-TMG/LID-HK transformer (upgrade from fastText for Cantonese-vs-Mandarin + code-switching). Ensemble rule (particle → fastText → transformer).
+- Cantonese post-processor: load Qwen2.5-7B-Instruct (or YueLLM-7B if license clean) on the Mac Studio as a second LM Studio slot; invoke only when `primary_lang == "yue"` and the main LLM replied in formal 繁體. Prompted with Cantonese style exemplars. (Pros/cons of running a second model resident: memory trade vs response quality — see `03_*.md`.)
 - Jyutping input support via `pycantonese` + `geo.jyutping_to_text`.
+- Translation-fallback upgrades: swap NLLB-200 for a per-language-optimised stack where it matters — e.g. NLLB for low-resource, optional cloud MT feature-flag for Japanese/Korean/European languages if the user approves that budget (Q10). Cache translations of common queries.
 - Context tools: `context.get_current_weather`, `context.get_9day_forecast`, `context.get_active_warnings`, `context.get_aqhi`, `context.get_live_service_summary`.
 - Orchestrator learns to **fan out** weather + AQI + MTR status in one `parallel_tool_calls` batch for travel queries — measured latency save target: 200–400 ms per turn.
-- Langfuse self-hosted online. Dashboards for latency p50/p95, tool-selection accuracy, Cantonese detection rate.
+- Langfuse self-hosted online. Dashboards for latency p50/p95, tool-selection accuracy, per-language detection rate, translation-fallback rate.
 
-**Golden set v0.2:** add 15 Cantonese-first queries (colloquial Cantonese, code-switched Canto-English, Jyutping one-liners).
+**Golden set v0.2:** add 15 Cantonese-first queries (colloquial Cantonese, code-switched Canto-English, Jyutping one-liners) + 10 queries in additional languages beyond the Phase 1 set (so total ≥ 55 queries across ≥ 10 languages).
 
 **Acceptance:**
-- Cantonese detection ≥ 95% on the golden set.
+- Cantonese detection ≥ 95% on the golden set; per-language detection ≥ 90% for every language with ≥ 5 queries in the set.
 - Answers in natural Cantonese when the user wrote Cantonese. A native HK reviewer rates ≥ 4/5 on tone/register (informal acceptance — we're not publishing a paper yet, just sanity check).
+- Per-language response reviewer scores (informal, one native-ish speaker per language where possible) ≥ 3/5 for readability.
 - Weather / AQI / warnings show up automatically when relevant (e.g. "outdoor court" triggers AQHI check).
 - Median latency ≤ 1.7 s. p95 ≤ 3.2 s.
 
