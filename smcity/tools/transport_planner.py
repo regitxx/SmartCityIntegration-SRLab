@@ -414,12 +414,13 @@ def _emit_ride(
 PLAN_SIMPLE_ROUTE_TOOL: ToolSpec[PlanSimpleRouteArgs, PlanSimpleRouteResult] = ToolSpec(
     name="transport.plan_simple_route",
     description_en=(
-        "Plan a walk + MTR + walk journey between two points in Hong Kong. Input: "
-        "either explicit station names/codes for origin + destination, or (lat, lng) "
-        "for each — or a mix (e.g. origin lat/lng, destination station). Returns "
-        "structured legs (walk / board / ride / transfer / alight) with duration "
-        "estimates plus the total travel time. Use for 'how do I get from X to Y' "
-        "queries where the user hasn't specified a bus route. For bus/minibus/tram "
+        "Plan a walk + MTR + walk journey between two points in Hong Kong. "
+        "PRECONDITION: only call this AFTER the user has explicitly chosen MTR "
+        "(or said 地鐵 / 港鐵). If the user only asked 'how do I get from X to "
+        "Y?' without a mode, call meta.ask_user first — do NOT default to MTR. "
+        "Inputs: explicit station names/codes OR (lat, lng) for origin and "
+        "destination (mix allowed). Returns legs (walk / board / ride / "
+        "transfer / alight) plus total travel time. For bus/minibus/tram "
         "routing, call the specific operator tools instead."
     ),
     args_schema=PlanSimpleRouteArgs,

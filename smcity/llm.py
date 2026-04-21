@@ -12,6 +12,7 @@ so the KV cache stays warm across turns.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -21,6 +22,58 @@ import httpx
 from openai import AsyncOpenAI, OpenAIError
 
 from smcity.settings import get_settings
+
+# Harmony (gpt-oss native output format) tool-call leak pattern. When LM Studio
+# doesn't parse these into `tool_calls`, they appear as raw content:
+#   <|start|>assistant<|channel|>commentary to=functions.NAME <|constrain|>json
+#   <|message|>{"...json..."}
+# We scrape these out, convert the function name back to our dotted form
+# (meta_ask_user -> meta.ask_user), and re-dispatch.
+_HARMONY_TOOLCALL_RE = re.compile(
+    r"<\|start\|>assistant<\|channel\|>commentary\s+to=functions\.([\w.]+)"
+    r".*?<\|message\|>(\{.*?\})(?:<\|end\|>)?",
+    re.DOTALL,
+)
+_HARMONY_TOKEN_RE = re.compile(r"<\|[^|]+?\|>")
+
+
+def _harmony_fn_to_tool(name: str, known_names: set[str] | None = None) -> str:
+    """Map `meta_ask_user` → `meta.ask_user` by greedy prefix match against the
+    registered tool names. Falls back to first-underscore-as-dot."""
+    if known_names and name in known_names:
+        return name
+    if known_names:
+        # Find the longest prefix (including dots) that matches an underscored form.
+        for candidate in sorted(known_names, key=len, reverse=True):
+            if candidate.replace(".", "_") == name:
+                return candidate
+    if "_" in name and "." not in name:
+        head, _, rest = name.partition("_")
+        return f"{head}.{rest}"
+    return name
+
+
+def extract_harmony_tool_calls(
+    text: str, *, known_tool_names: set[str] | None = None
+) -> tuple[str, list[dict[str, Any]]]:
+    """Scan `text` for harmony-format tool-call leaks. Returns a cleaned text
+    (with the harmony blocks and any stray harmony tokens stripped) plus a list
+    of `{id,name,arguments}` dicts in the order they appeared."""
+    calls: list[dict[str, Any]] = []
+    for i, m in enumerate(_HARMONY_TOOLCALL_RE.finditer(text)):
+        fn_raw = m.group(1)
+        args_json = m.group(2).strip()
+        calls.append(
+            {
+                "id": f"harmony-{i}",
+                "name": _harmony_fn_to_tool(fn_raw, known_tool_names),
+                "arguments": args_json,
+            }
+        )
+    cleaned = _HARMONY_TOOLCALL_RE.sub("", text)
+    # Strip any stray `<|…|>` tokens that sneaked through.
+    cleaned = _HARMONY_TOKEN_RE.sub("", cleaned).strip()
+    return cleaned, calls
 
 
 @dataclass(slots=True)
@@ -126,10 +179,15 @@ async def chat(
         }
         for tc in tool_calls_raw
     ]
+    raw_text = choice.message.content or ""
+    # Recover harmony-format tool calls that LM Studio failed to parse.
+    text, leaked = extract_harmony_tool_calls(raw_text)
+    if leaked and not tool_calls:
+        tool_calls = leaked
     usage = resp.usage.model_dump() if resp.usage else {}
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     return LLMReply(
-        text=choice.message.content or "",
+        text=text,
         tool_calls=tool_calls,
         usage=usage,
         elapsed_ms=elapsed_ms,
@@ -176,7 +234,11 @@ async def chat_stream(
             content = getattr(delta, "content", None)
             if content:
                 full_text.append(content)
-                yield StreamEvent(kind="token", text=content)
+                # Don't stream harmony-format tokens to the UI — they'll get
+                # parsed out at the end. The final event carries the cleaned
+                # text + recovered tool calls.
+                if "<|" not in content:
+                    yield StreamEvent(kind="token", text=content)
             tc_deltas = getattr(delta, "tool_calls", None)
             if tc_deltas:
                 for tc in tc_deltas:
@@ -193,9 +255,13 @@ async def chat_stream(
         raise LLMError(f"LM Studio stream failed: {err}") from err
 
     tool_calls = [tool_accum[i] for i in sorted(tool_accum)]
+    raw_text = "".join(full_text)
+    text, leaked = extract_harmony_tool_calls(raw_text)
+    if leaked and not tool_calls:
+        tool_calls = leaked
     yield StreamEvent(
         kind="final",
-        text="".join(full_text),
+        text=text,
         tool_calls=tool_calls,
         usage=usage,
         elapsed_ms=int((time.perf_counter() - started) * 1000),
