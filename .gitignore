@@ -40,6 +40,8 @@ traces/
 .vscode/
 *.swp
 *~
+~$*
+# Office lock files (~$filename.xlsx etc.)
 
 # OpenTripPlanner / Valhalla runtime
 otp/graph.obj
