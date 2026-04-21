@@ -17,7 +17,9 @@ DATASET_COVERAGE: dict[str, set[SupportedLang]] = {
     # Transport — from 01_datagovhk_transport_apis.md
     "transport.get_mtr_next_trains": {"en", "zh-Hant"},
     "transport.get_kmb_eta_by_stop": {"en", "zh-Hant", "zh-Hans"},
-    "transport.get_citybus_eta_by_stop": {"en", "zh-Hant", "zh-Hans"},
+    "transport.get_kmb_eta_by_route_stop": {"en", "zh-Hant", "zh-Hans"},
+    "transport.get_citybus_eta_by_route_stop": {"en", "zh-Hant", "zh-Hans"},
+    "transport.get_citybus_route_stops": {"en", "zh-Hant", "zh-Hans"},
     "transport.find_stops_near_point": {"en", "zh-Hant", "zh-Hans"},
     "transport.find_stops_by_name": {"en", "zh-Hant", "zh-Hans"},
     # Context — from 02_datagovhk_housing_context_apis.md
@@ -26,6 +28,12 @@ DATASET_COVERAGE: dict[str, set[SupportedLang]] = {
     "context.get_aqhi": {"en", "zh-Hant"},
     # Geo
     "geo.address_lookup": {"en", "zh-Hant"},
+    # Facility (bundled)
+    "facility.find_nearby_courts": {"en", "zh-Hant"},
+    "facility.find_nearby_pools": {"en", "zh-Hant"},
+    # Housing (bundled)
+    "housing.get_estate_info": {"en", "zh-Hant"},
+    "housing.list_estates_in_district": {"en", "zh-Hant"},
 }
 
 # Maps our internal primary_lang codes → the user's query language tag to use

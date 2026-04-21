@@ -91,6 +91,35 @@
         "expected_tools": ["meta.ask_user"], "expected_clarify": true,
         "code_switch": true,
         "notes": "喺 particle → yue; agent should ask which bus / where"}
+    ],
+    "phase1b": [
+      {"id": "kmb-01", "lang": "eng", "intended_user_lang": "eng",
+        "text": "When's the next KMB bus at Sheung Wan MTR?",
+        "expected_tools": ["transport.get_kmb_eta_by_stop"], "expected_clarify": false,
+        "notes": "KMB native-path (EN/繁/简)"},
+      {"id": "kmb-02", "lang": "yue", "intended_user_lang": "yue",
+        "text": "上環 MTR 嗰度下一班 1A 幾點到？",
+        "expected_tools": ["transport.get_kmb_eta_by_route_stop"], "expected_clarify": false,
+        "code_switch": true},
+      {"id": "court-01", "lang": "eng", "intended_user_lang": "eng",
+        "text": "Where's the nearest basketball court to Sheung Wan?",
+        "expected_tools": ["geo.address_lookup", "facility.find_nearby_courts"],
+        "expected_clarify": false},
+      {"id": "court-02", "lang": "yue", "intended_user_lang": "yue",
+        "text": "沙田附近有冇籃球場？",
+        "expected_tools": ["facility.find_nearby_courts"],
+        "expected_clarify": false,
+        "notes": "冇 particle → yue"},
+      {"id": "pool-01", "lang": "eng", "intended_user_lang": "eng",
+        "text": "Indoor swimming pools in Tsuen Wan?",
+        "expected_tools": ["facility.find_nearby_pools"], "expected_clarify": false},
+      {"id": "house-01", "lang": "eng", "intended_user_lang": "eng",
+        "text": "Tell me about Choi Hung Estate.",
+        "expected_tools": ["housing.get_estate_info"], "expected_clarify": false},
+      {"id": "house-02", "lang": "yue", "intended_user_lang": "yue",
+        "text": "彩虹邨有幾多樓？",
+        "expected_tools": ["housing.get_estate_info"], "expected_clarify": false,
+        "notes": "detected as yue (幾多 bigram fires Cantonese heuristic)"}
     ]
   }
 }

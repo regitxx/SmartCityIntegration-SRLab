@@ -26,11 +26,11 @@ htmlcov/
 # uv / pip
 .uv/
 
-# Data / runtime state
+# Runtime state (keep bundled reference data in data/; ignore sqlite + logs)
 *.sqlite
 *.sqlite3
 *.db
-data/
+data/sessions.sqlite3*
 logs/
 traces/
 

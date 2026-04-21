@@ -73,3 +73,23 @@ async def test_als_resolves_sheung_wan(online: bool) -> None:
     )
     # ALS sometimes returns empty for single-word queries; accept either.
     assert result.status == "ok", result.error
+
+
+async def test_kmb_live_stop_catalog_and_eta(online: bool) -> None:
+    if not _net_ok("data.etabus.gov.hk"):
+        pytest.skip("data.etabus.gov.hk unreachable")
+    # Reset the module-level catalog before hitting the live API.
+    from smcity.tools import transport_kmb as mod
+
+    mod._catalog = mod._StopCatalog()
+
+    registry = build_default_registry()
+    ctx = ToolContext(session_id="i", locale="eng", query_lang="en")
+    result = await registry.dispatch(
+        "transport.get_kmb_eta_by_stop", {"stop_name_or_id": "Sheung Wan"}, ctx
+    )
+    assert result.status == "ok", result.error
+    assert result.result is not None
+    # live schema keys
+    assert "stop_id" in result.result
+    assert "etas" in result.result

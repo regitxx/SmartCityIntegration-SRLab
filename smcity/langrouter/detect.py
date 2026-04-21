@@ -46,6 +46,7 @@ CANTONESE_PARTICLES: frozenset[str] = frozenset(
         "嘞",  # laak3 — assertive
         "咩",  # me1 — "what / ya know?"
         "係咪",  # hai6 mai6 — A/B question frame
+        "嗰",  # go2 — distal demonstrative "that"
     }
 )
 

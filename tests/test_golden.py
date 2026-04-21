@@ -21,7 +21,7 @@ GOLDEN_PATH = Path(__file__).parent / "golden" / "v0_1_queries.json"
 def _all_queries() -> list[dict[str, object]]:
     data = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
     out: list[dict[str, object]] = []
-    for bucket in ("native", "fallback"):
+    for bucket in data["buckets"]:
         for q in data["buckets"][bucket]:
             out.append({**q, "_bucket": bucket})
     return out

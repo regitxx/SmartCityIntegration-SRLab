@@ -1,0 +1,12 @@
+[
+  {"id":"SP-CEN-01","name_en":"Kennedy Town Swimming Pool","name_tc":"堅尼地城游泳池","district":"Central and Western","lat":22.2833,"lng":114.1267,"indoor":true,"heated":true,"lanes":8},
+  {"id":"SP-TST-01","name_en":"Kowloon Park Swimming Pool","name_tc":"九龍公園游泳池","district":"Yau Tsim Mong","lat":22.3005,"lng":114.1710,"indoor":true,"heated":true,"lanes":8},
+  {"id":"SP-VIC-01","name_en":"Victoria Park Swimming Pool","name_tc":"維多利亞公園游泳池","district":"Wan Chai","lat":22.2822,"lng":114.1885,"indoor":false,"heated":false,"lanes":10},
+  {"id":"SP-SHT-01","name_en":"Sha Tin Jockey Club Swimming Pool","name_tc":"沙田賽馬會泳池","district":"Sha Tin","lat":22.3853,"lng":114.1930,"indoor":false,"heated":false,"lanes":10},
+  {"id":"SP-MOK-01","name_en":"Mong Kok Complex Swimming Pool","name_tc":"旺角大球場暨泳池","district":"Yau Tsim Mong","lat":22.3220,"lng":114.1710,"indoor":true,"heated":true,"lanes":8},
+  {"id":"SP-TKO-01","name_en":"Tseung Kwan O Swimming Pool","name_tc":"將軍澳游泳池","district":"Sai Kung","lat":22.3110,"lng":114.2620,"indoor":true,"heated":true,"lanes":10},
+  {"id":"SP-TSW-01","name_en":"Tsuen Wan Swimming Pool","name_tc":"荃灣游泳池","district":"Tsuen Wan","lat":22.3735,"lng":114.1170,"indoor":true,"heated":true,"lanes":8},
+  {"id":"SP-TUC-01","name_en":"Tung Chung Swimming Pool","name_tc":"東涌游泳池","district":"Islands","lat":22.2895,"lng":113.9430,"indoor":true,"heated":true,"lanes":8},
+  {"id":"SP-KWT-01","name_en":"Kwun Tong Swimming Pool","name_tc":"觀塘游泳池","district":"Kwun Tong","lat":22.3150,"lng":114.2220,"indoor":true,"heated":true,"lanes":8},
+  {"id":"SP-TUM-01","name_en":"Tuen Mun Swimming Pool","name_tc":"屯門游泳池","district":"Tuen Mun","lat":22.3925,"lng":113.9740,"indoor":true,"heated":true,"lanes":8}
+]

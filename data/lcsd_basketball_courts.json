@@ -1,0 +1,17 @@
+[
+  {"id":"BB-CWB-01","name_en":"Southorn Playground Basketball Court","name_tc":"修頓遊樂場籃球場","district":"Wan Chai","lat":22.2775,"lng":114.1720,"courts":2,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-CEN-01","name_en":"Hollywood Road Park Basketball Court","name_tc":"荷李活道公園籃球場","district":"Central and Western","lat":22.2840,"lng":114.1490,"courts":1,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-SHW-01","name_en":"Sheung Wan Sports Centre Basketball Court","name_tc":"上環體育館籃球場","district":"Central and Western","lat":22.2872,"lng":114.1517,"courts":1,"floodlit":false,"outdoor":false,"booking":"smartplay"},
+  {"id":"BB-SST-01","name_en":"Sha Tin Jockey Club Swimming Pool Basketball Court","name_tc":"沙田賽馬會泳池籃球場","district":"Sha Tin","lat":22.3850,"lng":114.1940,"courts":2,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-SHT-02","name_en":"Sha Tin Sports Ground Basketball Court","name_tc":"沙田運動場籃球場","district":"Sha Tin","lat":22.3820,"lng":114.1915,"courts":2,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-MOK-01","name_en":"Fa Hui Park Basketball Court","name_tc":"花墟公園籃球場","district":"Yau Tsim Mong","lat":22.3225,"lng":114.1710,"courts":2,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-SSP-01","name_en":"Lai Kok Estate Basketball Court","name_tc":"麗閣邨籃球場","district":"Sham Shui Po","lat":22.3314,"lng":114.1548,"courts":2,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-KWT-01","name_en":"Kwun Tong Recreation Ground Basketball Court","name_tc":"觀塘遊樂場籃球場","district":"Kwun Tong","lat":22.3128,"lng":114.2248,"courts":2,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-TUM-01","name_en":"Tuen Mun Sports Ground Basketball Court","name_tc":"屯門運動場籃球場","district":"Tuen Mun","lat":22.3910,"lng":113.9740,"courts":2,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-YUL-01","name_en":"Yuen Long Stadium Basketball Court","name_tc":"元朗大球場籃球場","district":"Yuen Long","lat":22.4450,"lng":114.0320,"courts":2,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-CHH-01","name_en":"Choi Hung Road Playground Basketball Court","name_tc":"彩虹道遊樂場籃球場","district":"Wong Tai Sin","lat":22.3360,"lng":114.2090,"courts":1,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-NOP-01","name_en":"Java Road Playground Basketball Court","name_tc":"渣華道遊樂場籃球場","district":"Eastern","lat":22.2900,"lng":114.2010,"courts":2,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-HKU-01","name_en":"Sai Yin Pun Basketball Court","name_tc":"西營盤籃球場","district":"Central and Western","lat":22.2855,"lng":114.1430,"courts":1,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-TSW-01","name_en":"Tsuen Wan Sports Ground Basketball Court","name_tc":"荃灣運動場籃球場","district":"Tsuen Wan","lat":22.3710,"lng":114.1165,"courts":2,"floodlit":true,"outdoor":true,"booking":"free"},
+  {"id":"BB-TUC-01","name_en":"Tung Chung North Park Basketball Court","name_tc":"東涌北公園籃球場","district":"Islands","lat":22.2920,"lng":113.9425,"courts":2,"floodlit":true,"outdoor":true,"booking":"free"}
+]
