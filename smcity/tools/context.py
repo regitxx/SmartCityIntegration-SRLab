@@ -173,6 +173,89 @@ ACTIVE_WARNINGS_TOOL: ToolSpec[ActiveWarningsArgs, ActiveWarningsResult] = ToolS
 )
 
 
+# --- 9-day forecast (HKO fnd) ---------------------------------------------
+
+
+class NineDayForecastArgs(BaseModel):
+    pass
+
+
+class ForecastDay(BaseModel):
+    forecast_date: str  # YYYYMMDD as returned by HKO
+    week: str
+    forecast_maxtemp_c: float | None = None
+    forecast_mintemp_c: float | None = None
+    forecast_maxrh_pct: int | None = None
+    forecast_minrh_pct: int | None = None
+    forecast_weather: str
+    forecast_wind: str | None = None
+    psr: str | None = None  # probability of significant rainfall
+
+
+class NineDayForecastResult(BaseModel):
+    general_situation: str
+    days: list[ForecastDay]
+    update_time: str | None = None
+    source: str = "hko.fnd"
+
+
+async def _nine_day_handler(args: NineDayForecastArgs, ctx: ToolContext) -> NineDayForecastResult:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as h:
+            r = await h.get(
+                HKO_BASE, params={"dataType": "fnd", "lang": _lang_param(ctx.query_lang)}
+            )
+            r.raise_for_status()
+            data = r.json()
+    except httpx.HTTPError as err:
+        raise ToolUpstreamError(f"HKO fnd failed: {err}") from err
+
+    days: list[ForecastDay] = []
+    for rec in data.get("weatherForecast") or []:
+        max_t = (rec.get("forecastMaxtemp") or {}).get("value")
+        min_t = (rec.get("forecastMintemp") or {}).get("value")
+        max_rh = (rec.get("forecastMaxrh") or {}).get("value")
+        min_rh = (rec.get("forecastMinrh") or {}).get("value")
+        days.append(
+            ForecastDay(
+                forecast_date=str(rec.get("forecastDate", "")),
+                week=str(rec.get("week", "")),
+                forecast_maxtemp_c=float(max_t) if max_t is not None else None,
+                forecast_mintemp_c=float(min_t) if min_t is not None else None,
+                forecast_maxrh_pct=int(max_rh) if max_rh is not None else None,
+                forecast_minrh_pct=int(min_rh) if min_rh is not None else None,
+                forecast_weather=str(rec.get("forecastWeather", "")),
+                forecast_wind=rec.get("forecastWind"),
+                psr=rec.get("PSR"),
+            )
+        )
+
+    return NineDayForecastResult(
+        general_situation=str(data.get("generalSituation", "")),
+        days=days,
+        update_time=data.get("updateTime"),
+    )
+
+
+NINE_DAY_FORECAST_TOOL: ToolSpec[NineDayForecastArgs, NineDayForecastResult] = ToolSpec(
+    name="context.get_9day_forecast",
+    description_en=(
+        "9-day weather outlook from HKO — daily max/min temperature, humidity "
+        "range, wind summary, probability of significant rainfall, and the "
+        "general regional situation. Use when the user asks about tomorrow / "
+        "this week / next few days / weekend weather. For 'right now' use "
+        "context.get_current_weather instead."
+    ),
+    args_schema=NineDayForecastArgs,
+    result_schema=NineDayForecastResult,
+    handler=_nine_day_handler,
+    ttl_seconds=60 * 60,  # refreshed ~5 times/day upstream
+    budget_ms=1500,
+    upstream_langs=frozenset({"en", "zh-Hant", "zh-Hans"}),
+    upstream="data.weather.gov.hk/fnd",
+)
+
+
 # --- AQHI ------------------------------------------------------------------
 
 

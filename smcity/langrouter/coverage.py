@@ -26,6 +26,11 @@ DATASET_COVERAGE: dict[str, set[SupportedLang]] = {
     "transport.plan_walking_route": {"en", "zh-Hant"},
     "transport.plan_taxi_estimate": {"en", "zh-Hant"},
     "transport.plan_journey": {"en", "zh-Hant"},
+    "transport.get_gmb_eta": {"en", "zh-Hant", "zh-Hans"},
+    # Context
+    "context.get_9day_forecast": {"en", "zh-Hant", "zh-Hans"},
+    # Geo — OpenStreetMap (multilingual tags; EN/繁體 usually populated).
+    "geo.search_osm_pois": {"en", "zh-Hant", "zh-Hans"},
     # Context — from 02_datagovhk_housing_context_apis.md
     "context.get_current_weather": {"en", "zh-Hant", "zh-Hans"},
     "context.get_active_warnings": {"en", "zh-Hant", "zh-Hans"},

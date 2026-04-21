@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.3.0] — 2026-04-21
+
+Aligns the tool registry with the lab's `3 - Selected Smart City Data Maps.xlsx` workbook. **30 of 35 workbook datasets are now served by live APIs** (all 27 POI categories + all 3 road-facility categories). See `docs/DATASETS.md` for the per-ID coverage map.
+
+### New tools (3; registry 22 → 25)
+
+- **`geo.search_osm_pois`** — unified OpenStreetMap Overpass search covering **all 30 POI + road-facility categories from the workbook** (S514-S549) in ONE tool. Category enum maps to the Overpass tag filters from the xlsx (e.g. `public_toilet` → `amenity=toilets`, `mtr_station_entrance` → `railway=subway_entrance`, `dentist` → `amenity=dentist OR healthcare=dentist`). Accepts lat/lng + radius, bbox, or defaults to all of HK. Returns deduplicated POIs with name_en/name_zh/brand/opening_hours/wheelchair tags where present.
+
+- **`transport.get_gmb_eta`** — Green Minibus live ETA via `data.etagmb.gov.hk`. Two-hop call internally: `/route/{region}/{code}` → route_id, then `/eta/route-stop/{route_id}/{stop_id}` → ETAs. Returns sorted arrivals + destination EN + 繁體.
+
+- **`context.get_9day_forecast`** — HKO 9-day weather outlook (`dataType=fnd`). Max/min temperature, humidity range, wind summary, probability of significant rainfall, and the general regional situation for each day.
+
+### Documentation
+
+- **`docs/DATASETS.md`** — full xlsx → tool coverage map. Every S-ID from the workbook is tagged ✅ live / 🟨 bundled / ⏳ deferred, with the exact tool name + Overpass category where applicable.
+
+### Tests
+
+- 8 new unit tests in `tests/test_osm_gmb_forecast.py`:
+  - All 30 POI categories have tag specs (catches category-literal drift).
+  - Overpass query builder encodes bbox + tags correctly.
+  - Multi-tag categories (dentist = amenity OR healthcare) expand both filters.
+  - Bbox-from-point sanity check.
+  - Overpass response parsing + deduplication by osm_type+id.
+  - GMB two-hop flow (route lookup then ETA).
+  - HKO 9-day forecast payload parsing.
+- **164 unit tests green**, ruff + mypy strict clean across 52 source files.
+
+### What's deferred to v0.4+
+
+- S500 (GTFS headway), S505 (MTR fares + barrier-free), S506 (ferry timetable), S507 (PT routes + fares) — all data.gov.hk transportation datasets that need custom parsers.
+- S512 (iB1000 topographic map via CSDI) — needs ArcGIS service-ID discovery.
+- Live upgrade of the bundled LCSD basketball / pool tools and HKHA estates tool (same CSDI service-ID blocker).
+
 ## [0.2.0] — 2026-04-21
 
 Closes the remaining transport-mode gaps that the live v0.1.0 session
