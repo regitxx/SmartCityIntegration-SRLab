@@ -2,12 +2,13 @@
 
 Flow:
 1. Detect language (particle heuristic + script majority).
-2. Normalise for upstream queries if needed (OpenCC s2hk).
+2. Run the deterministic pre-classifier. On a clear fast-path intent we skip
+   the first LLM hop entirely.
 3. Load session slots.
 4. Build tool schemas + a system prompt that teaches the LLM the house rules.
-5. Call gpt-oss-120b with tools + parallel_tool_calls.
+5. Call gpt-oss-120b with tools + parallel_tool_calls (session_id → KV slot).
 6. Execute each tool via the registry, in parallel, emitting live events.
-7. Re-prompt the LLM with tool results for the final reply.
+7. Re-prompt the LLM (streaming) with tool results; yield tokens as they arrive.
 8. Persist slots; return a TurnResponse with citations + tool trace.
 """
 
@@ -21,8 +22,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from smcity.classifier import FastPathHit, classify
 from smcity.langrouter import DATASET_COVERAGE, LangDetection, choose_query_lang, detect
-from smcity.llm import LLMError, chat
+from smcity.llm import LLMError, chat, chat_stream
 from smcity.schemas import (
     Citation,
     LanguageCoverage,
@@ -38,25 +40,28 @@ from smcity.tools.registry import ToolContext, ToolResult
 # --- system prompt --------------------------------------------------------
 
 _SYSTEM_PROMPT = """You are the Hong Kong smart-city assistant for the Lab of \
-Social Robotics. You help users with transportation (MTR, bus, minibus, tram, \
-ferry, taxi, walking), public facilities, housing, weather, air quality, and \
-related questions in any language.
+Social Robotics. You help users with transportation (MTR, KMB/LWB bus, Citybus, \
+minibus, tram, ferry, taxi, walking), public facilities (LCSD courts + pools), \
+public housing (HKHA estates), weather, air quality, and related HK questions \
+in any language.
 
 Principles:
 - Cantonese is the priority language. When the user writes in Cantonese, reply \
 in natural written Cantonese (using 嘅 / 喺 / 咗 / 冇 / 佢 / 唔 etc.). Never \
-silently convert to Mandarin.
-- Answer in the user's language unless they explicitly switched.
-- Every factual claim about HK city state comes from a tool call. Do not invent \
-MTR stations, bus routes, weather numbers, AQHI bands, or addresses.
+silently switch to Mandarin.
+- Answer in the user's language. Tool output is often bilingual — that is data, \
+not a language cue. Do not switch language after seeing Chinese characters in \
+tool results.
+- Every factual claim about HK city state comes from a tool call. Do not \
+invent MTR stations, bus routes, weather numbers, AQHI bands, or addresses.
 - When origin / destination / transport mode / venue type is missing or \
 ambiguous, call meta.ask_user with ONE short question. Do not ask multiple \
 questions in one turn.
 - For travel queries, parallelise context tools (weather + warnings + AQHI) \
 with the transport tool in ONE tool-calls batch.
 - Keep final replies short (2-4 sentences) unless the user asks for detail.
-- At the end of every user-facing reply, include a one-line source footer such \
-as "src: mtr_next_trains · hko_warnings · 14:03".
+- At the end of every user-facing reply, include a one-line source footer \
+such as "src: mtr_next_trains / hko_warnings / 14:03".
 
 Tools are listed separately. Call them when useful; answer directly only for \
 conversational pleasantries."""
@@ -67,20 +72,14 @@ conversational pleasantries."""
 
 @dataclass(slots=True)
 class TurnEvent:
-    type: str  # "turn.start" | "tool_call.start" | "tool_call.result" | "turn.final"
+    type: str
     data: dict[str, Any] = field(default_factory=dict)
 
 
-EventEmitter = Callable[[TurnEvent], Any]  # fire-and-forget
+EventEmitter = Callable[[TurnEvent], Any]
 
 
 # --- orchestrator ---------------------------------------------------------
-
-
-@dataclass(slots=True)
-class OrchestratorResult:
-    response: TurnResponse
-    events: list[TurnEvent]
 
 
 class Orchestrator:
@@ -99,14 +98,11 @@ class Orchestrator:
         emit: EventEmitter | None = None,
     ) -> TurnResponse:
         started = time.perf_counter()
-        events: list[TurnEvent] = []
 
         def _emit(ev: TurnEvent) -> None:
-            events.append(ev)
             if emit is not None:
                 emit(ev)
 
-        # 1) PII scrub + language detect
         safe_text = redact_pii(req.text)
         slots = await self._store.load(req.session_id)
 
@@ -118,15 +114,18 @@ class Orchestrator:
             method="carried",
         )
 
-        forced = req.locale_override and req.locale_override != "auto"
-        if forced:
-            detection = _detection_from_override(req.locale_override or "", carried)
-        else:
-            detection = detect(safe_text, carried=carried)
+        forced = bool(req.locale_override and req.locale_override != "auto")
+        detection = (
+            _detection_from_override(req.locale_override or "", carried)
+            if forced
+            else detect(safe_text, carried=carried)
+        )
 
-        slots.locale = Locale.from_detection(detection, forced=bool(forced))
+        slots.locale = Locale.from_detection(detection, forced=forced)
         if req.user_location is not None:
             slots.user_location = req.user_location
+
+        fast_hit = classify(safe_text) if not forced else None
 
         _emit(
             TurnEvent(
@@ -136,52 +135,112 @@ class Orchestrator:
                     "detected_lang": detection.primary_lang,
                     "tts_locale": detection.tts_locale,
                     "method": detection.method,
-                    "forced": bool(forced),
+                    "forced": forced,
+                    "fast_path": fast_hit.intent if fast_hit else None,
                 },
             )
         )
-
-        # 2) First LLM pass — may request tool calls
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "system", "content": _locale_hint(detection)},
-            {"role": "user", "content": safe_text},
-        ]
-
-        try:
-            first = await chat(
-                messages, tools=self._registry.openai_schemas(), parallel_tool_calls=True
-            )
-        except LLMError as err:
-            return self._degraded(req, slots, detection, started, events, str(err))
 
         tool_trace: list[ToolTraceEntry] = []
         citations: list[Citation] = []
         clarification: str | None = None
 
+        # ---- fast path: chitchat = no tools, no LLM ----------------------
+        if fast_hit and fast_hit.intent == "chitchat" and fast_hit.reply_if_chitchat:
+            reply_text = _localise_chitchat(fast_hit.reply_if_chitchat, detection)
+            await self._store.save(slots)
+            response = self._build_response(
+                req,
+                detection,
+                forced,
+                reply_text,
+                citations,
+                tool_trace,
+                clarification,
+                started,
+            )
+            _emit(TurnEvent(type="turn.final", data=response.model_dump(mode="json")))
+            return response
+
+        # ---- fast path: deterministic tool dispatch ----------------------
+        if fast_hit and fast_hit.tools:
+            tool_results = await self._run_parallel_named(fast_hit.tools, slots, detection, _emit)
+            self._append_trace_and_citations(tool_results, tool_trace, citations, detection)
+
+            # Single streaming LLM hop to synthesise the final reply from tool data.
+            messages = self._build_messages(safe_text, detection, forced, include_tools=False)
+            messages.append(
+                {
+                    "role": "system",
+                    "content": _fast_path_synthesis_hint(fast_hit, tool_results, detection),
+                }
+            )
+            reply_text = await self._stream_final(messages, req.session_id, _emit)
+
+            await self._store.save(slots)
+            response = self._build_response(
+                req,
+                detection,
+                forced,
+                reply_text,
+                citations,
+                tool_trace,
+                clarification,
+                started,
+            )
+            _emit(TurnEvent(type="turn.final", data=response.model_dump(mode="json")))
+            return response
+
+        # ---- full path: LLM picks tools, we execute, LLM synthesises -----
+        messages = self._build_messages(safe_text, detection, forced, include_tools=True)
+
+        try:
+            first = await chat(
+                messages,
+                tools=self._registry.openai_schemas(),
+                parallel_tool_calls=True,
+                session_id=req.session_id,
+            )
+        except LLMError as err:
+            reply_text = "(LM Studio unreachable — check Tailscale and the Mac Studio)"
+            await self._store.save(slots)
+            response = self._build_response(
+                req,
+                detection,
+                forced,
+                reply_text,
+                citations,
+                tool_trace,
+                clarification,
+                started,
+                err=str(err),
+            )
+            _emit(TurnEvent(type="turn.final", data=response.model_dump(mode="json")))
+            return response
+
         if first.tool_calls:
-            # 3) Execute every tool call in parallel
             tool_results = await self._run_parallel(first.tool_calls, slots, detection, _emit)
 
-            # Extract ask_user if present — that's our clarification gate
             for res in tool_results:
                 if res.name == "meta.ask_user" and res.status == "ok" and res.result:
                     clarification = str(res.result.get("question") or "")
 
-            # 4) Second LLM pass with tool outputs
-            assistant_msg: dict[str, Any] = {
-                "role": "assistant",
-                "content": first.text or "",
-                "tool_calls": [
-                    {
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                    }
-                    for tc in first.tool_calls
-                ],
-            }
-            messages.append(assistant_msg)
+            self._append_trace_and_citations(tool_results, tool_trace, citations, detection)
+
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": first.text or "",
+                    "tool_calls": [
+                        {
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                        }
+                        for tc in first.tool_calls
+                    ],
+                }
+            )
             for res in tool_results:
                 messages.append(
                     {
@@ -193,61 +252,71 @@ class Orchestrator:
                         ),
                     }
                 )
-                tool_trace.append(
-                    ToolTraceEntry(
-                        index=len(tool_trace) + 1,
-                        name=res.name,
-                        args=res.args,
-                        status=res.status,  # type: ignore[arg-type]
-                        latency_ms=res.latency_ms,
-                        result_summary=_summarise(res),
-                    )
-                )
-                if res.status == "ok":
-                    spec = self._registry.get(res.name)
-                    citations.append(
-                        Citation(
-                            tool=res.name,
-                            upstream=spec.upstream or "(local)",
-                            fetched_at=datetime.now(UTC),
-                            upstream_langs=sorted(spec.upstream_langs),
-                            translation_applied=_translation_flag(res.name, detection),
-                        )
-                    )
+            # Post-tool reminder — prevents the "Chinese in tool output pulled the
+            # reply into Cantonese/Mandarin" register bug.
+            messages.append({"role": "system", "content": _language_stick_reminder(detection)})
 
-            try:
-                second = await chat(messages)
-                reply_text = second.text or first.text or "(no reply)"
-            except LLMError as err:
-                reply_text = f"(LLM error in follow-up: {err})"
+            reply_text = await self._stream_final(messages, req.session_id, _emit)
         else:
             reply_text = first.text or "(empty reply)"
 
         if clarification:
-            # If meta.ask_user fired, prefer surfacing the clarification exactly.
             reply_text = clarification
 
         await self._store.save(slots)
-
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        response = TurnResponse(
-            session_id=req.session_id,
-            text=reply_text,
-            lang=LanguageCoverage(
-                source="forced" if forced else "detected",
-                primary_lang=detection.primary_lang,
-                upstream_langs_available=_langs_of(tool_trace),
-                translation_applied=any(c.translation_applied for c in citations),
-            ),
-            citations=citations,
-            tool_trace=tool_trace,
-            followups=[clarification] if clarification else [],
-            elapsed_ms=elapsed_ms,
+        response = self._build_response(
+            req,
+            detection,
+            forced,
+            reply_text,
+            citations,
+            tool_trace,
+            clarification,
+            started,
         )
         _emit(TurnEvent(type="turn.final", data=response.model_dump(mode="json")))
         return response
 
     # --- helpers ----------------------------------------------------------
+
+    def _build_messages(
+        self,
+        text: str,
+        detection: LangDetection,
+        forced: bool,
+        *,
+        include_tools: bool,
+    ) -> list[dict[str, Any]]:
+        msgs: list[dict[str, Any]] = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": _locale_hint(detection, forced=forced)},
+            {"role": "user", "content": text},
+        ]
+        return msgs
+
+    async def _stream_final(
+        self,
+        messages: list[dict[str, Any]],
+        session_id: str,
+        emit: EventEmitter,
+    ) -> str:
+        """Run the synthesis LLM call in streaming mode, emitting tokens live."""
+        buf: list[str] = []
+        first_token_at: float | None = None
+        try:
+            async for event in chat_stream(messages, session_id=session_id):
+                if event.kind == "token" and event.text:
+                    if first_token_at is None:
+                        first_token_at = time.perf_counter()
+                        emit(TurnEvent(type="turn.llm_first_token", data={}))
+                    buf.append(event.text)
+                    emit(TurnEvent(type="turn.token", data={"text": event.text}))
+                elif event.kind == "final":
+                    if not buf and event.text:
+                        buf.append(event.text)
+        except LLMError as err:
+            buf.append(f" (synthesis error: {err})")
+        return "".join(buf) or "(empty reply)"
 
     async def _run_parallel(
         self,
@@ -262,60 +331,112 @@ class Orchestrator:
                 args = json.loads(tc.get("arguments") or "{}")
             except json.JSONDecodeError:
                 args = {}
-            query_lang, translated = choose_query_lang(
-                name, detection.primary_lang, detection.script
-            )
-            ctx = ToolContext(
-                session_id=slots.session_id,
-                locale=detection.primary_lang,
-                query_lang=query_lang,
-                translation_applied=translated,
-            )
-            emit(
-                TurnEvent(
-                    type="tool_call.start",
-                    data={"name": name, "args": args, "query_lang": query_lang},
-                )
-            )
-            result = await self._registry.dispatch(name, args, ctx)
-            emit(
-                TurnEvent(
-                    type="tool_call.result",
-                    data={
-                        "name": name,
-                        "status": result.status,
-                        "latency_ms": result.latency_ms,
-                        "error": result.error,
-                    },
-                )
-            )
-            return result
+            return await self._dispatch_one(name, args, slots, detection, emit)
 
         return await asyncio.gather(*(_one(tc) for tc in tool_calls))
 
-    def _degraded(
+    async def _run_parallel_named(
         self,
-        req: TurnRequest,
+        tool_names: list[str],
         slots: SessionSlots,
         detection: LangDetection,
+        emit: EventEmitter,
+    ) -> list[ToolResult]:
+        return await asyncio.gather(
+            *(self._dispatch_one(name, {}, slots, detection, emit) for name in tool_names)
+        )
+
+    async def _dispatch_one(
+        self,
+        name: str,
+        args: dict[str, Any],
+        slots: SessionSlots,
+        detection: LangDetection,
+        emit: EventEmitter,
+    ) -> ToolResult:
+        query_lang, translated = choose_query_lang(name, detection.primary_lang, detection.script)
+        ctx = ToolContext(
+            session_id=slots.session_id,
+            locale=detection.primary_lang,
+            query_lang=query_lang,
+            translation_applied=translated,
+        )
+        emit(
+            TurnEvent(
+                type="tool_call.start",
+                data={"name": name, "args": args, "query_lang": query_lang},
+            )
+        )
+        result = await self._registry.dispatch(name, args, ctx)
+        emit(
+            TurnEvent(
+                type="tool_call.result",
+                data={
+                    "name": name,
+                    "status": result.status,
+                    "latency_ms": result.latency_ms,
+                    "error": result.error,
+                },
+            )
+        )
+        return result
+
+    def _append_trace_and_citations(
+        self,
+        tool_results: list[ToolResult],
+        tool_trace: list[ToolTraceEntry],
+        citations: list[Citation],
+        detection: LangDetection,
+    ) -> None:
+        for res in tool_results:
+            tool_trace.append(
+                ToolTraceEntry(
+                    index=len(tool_trace) + 1,
+                    name=res.name,
+                    args=res.args,
+                    status=res.status,  # type: ignore[arg-type]
+                    latency_ms=res.latency_ms,
+                    result_summary=_summarise(res),
+                )
+            )
+            if res.status == "ok":
+                spec = self._registry.get(res.name)
+                citations.append(
+                    Citation(
+                        tool=res.name,
+                        upstream=spec.upstream or "(local)",
+                        fetched_at=datetime.now(UTC),
+                        upstream_langs=sorted(spec.upstream_langs),
+                        translation_applied=_translation_flag(res.name, detection),
+                    )
+                )
+
+    def _build_response(
+        self,
+        req: TurnRequest,
+        detection: LangDetection,
+        forced: bool,
+        reply_text: str,
+        citations: list[Citation],
+        tool_trace: list[ToolTraceEntry],
+        clarification: str | None,
         started: float,
-        events: list[TurnEvent],
-        err: str,
+        *,
+        err: str | None = None,
     ) -> TurnResponse:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        msg = "(LM Studio unreachable — check Tailscale and the Mac Studio)"
         return TurnResponse(
             session_id=req.session_id,
-            text=msg,
+            text=reply_text,
             lang=LanguageCoverage(
-                source="forced" if req.locale_override else "detected",
+                source="forced" if forced else "detected",
                 primary_lang=detection.primary_lang,
-                upstream_langs_available=[],
-                translation_applied=False,
+                upstream_langs_available=_langs_of(tool_trace),
+                translation_applied=any(c.translation_applied for c in citations),
             ),
-            citations=[],
-            tool_trace=[],
-            followups=[],
+            citations=citations,
+            tool_trace=tool_trace,
+            followups=[clarification] if clarification else [],
             elapsed_ms=elapsed_ms,
         )
 
@@ -323,12 +444,45 @@ class Orchestrator:
 # --- module-level helpers -------------------------------------------------
 
 
-def _locale_hint(d: LangDetection) -> str:
+def _locale_hint(d: LangDetection, *, forced: bool) -> str:
+    tone = "forced by the user" if forced else "detected"
     return (
-        f"User language: primary_lang={d.primary_lang!r} script={d.script!r} "
-        f"tts_locale={d.tts_locale!r}. Reply in this language. If user wrote "
-        f"Cantonese (yue), use natural written Cantonese with particles like 嘅/喺/咗/冇/佢/唔."
+        f"User language ({tone}): primary_lang={d.primary_lang!r} "
+        f"script={d.script!r} tts_locale={d.tts_locale!r}. "
+        "REPLY IN THIS LANGUAGE. If Cantonese (yue), use natural written "
+        "Cantonese with particles 嘅/喺/咗/冇/佢/唔. "
+        "Tool output will contain fields in multiple languages (name_en, "
+        "name_tc, name_sc) — those are DATA, not a cue to switch languages."
     )
+
+
+def _language_stick_reminder(d: LangDetection) -> str:
+    return (
+        f"Now synthesise the final reply. REPLY LANGUAGE IS {d.primary_lang!r}. "
+        "Do not switch to Chinese or English because the tool output contained "
+        "bilingual fields. Pick fields in the user's language from the tool "
+        "response and form natural prose in that language only."
+    )
+
+
+def _fast_path_synthesis_hint(hit: FastPathHit, results: list[ToolResult], d: LangDetection) -> str:
+    bullets = [
+        f"- {r.name}: {json.dumps(r.result, ensure_ascii=False) if r.result else r.error}"
+        for r in results
+    ]
+    joined = "\n".join(bullets)
+    return (
+        f"FAST-PATH intent={hit.intent!r}. Tool results:\n{joined}\n\n"
+        f"Reply concisely in {d.primary_lang!r} ({d.tts_locale}). Include the "
+        "specific numbers and a one-line source footer."
+    )
+
+
+def _localise_chitchat(canned: str, d: LangDetection) -> str:
+    # The chitchat table already returns one reply per language; if the user
+    # wrote Cantonese but hit an English branch (shouldn't happen), tag so the
+    # downstream formatter knows this was a fast-canned reply.
+    return canned
 
 
 def _detection_from_override(code: str, carried: LangDetection) -> LangDetection:
@@ -383,6 +537,12 @@ def _summarise(res: ToolResult) -> str | None:
     if res.name == "transport.get_mtr_next_trains":
         trains = data.get("next_trains") or []
         return f"{len(trains)} trains @ {data.get('station_name_en')}"
+    if res.name == "transport.get_kmb_eta_by_stop":
+        return f"{len(data.get('etas') or [])} KMB ETAs @ {data.get('stop_name_en')}"
+    if res.name == "transport.get_citybus_eta_by_route_stop":
+        return f"{len(data.get('etas') or [])} Citybus ETAs"
+    if res.name == "transport.find_stops_near_point":
+        return f"{len(data.get('stops') or [])} stops"
     if res.name == "context.get_current_weather":
         return f"{data.get('temperature_c')}°C / {data.get('humidity_pct')}% RH"
     if res.name == "context.get_active_warnings":
@@ -394,6 +554,13 @@ def _summarise(res: ToolResult) -> str | None:
     if res.name == "geo.address_lookup":
         candidates = data.get("candidates") or []
         return f"{len(candidates)} candidates"
+    if res.name == "facility.find_nearby_courts":
+        return f"{len(data.get('courts') or [])} courts"
+    if res.name == "facility.find_nearby_pools":
+        return f"{len(data.get('pools') or [])} pools"
+    if res.name == "housing.get_estate_info":
+        m = data.get("match")
+        return m.get("name_en") if isinstance(m, dict) else None
     return None
 
 

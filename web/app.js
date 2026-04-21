@@ -95,6 +95,9 @@ ws.addEventListener("close", () => {
   addMessage({ who: "system", text: "disconnected" });
 });
 
+let _draftBody = null;  // the .body element we stream tokens into
+let _turnStartedAt = 0;
+
 ws.addEventListener("message", (ev) => {
   let msg;
   try { msg = JSON.parse(ev.data); } catch { return; }
@@ -107,12 +110,23 @@ ws.addEventListener("message", (ev) => {
       break;
     case "turn.start":
       _turnOpen = true;
+      _turnStartedAt = performance.now();
       resetTrace();
       _draftingNode = addMessage({
         who: "agent",
-        text: "drafting…",
+        text: "",
         lang: msg.detected_lang,
       });
+      _draftBody = _draftingNode.querySelector(".body");
+      // Pre-fill with a subtle placeholder until first token arrives.
+      if (_draftBody) _draftBody.classList.add("streaming");
+      if (msg.fast_path) {
+        const meta = _draftingNode.querySelector(".meta");
+        if (meta) meta.insertAdjacentHTML(
+          "beforeend",
+          `<span class="chip">fast-path: ${msg.fast_path}</span>`
+        );
+      }
       break;
     case "tool_call.start":
       addTraceStart(msg);
@@ -120,17 +134,37 @@ ws.addEventListener("message", (ev) => {
     case "tool_call.result":
       addTraceResult(msg);
       break;
+    case "turn.llm_first_token":
+      if (_draftBody) _draftBody.classList.remove("streaming");
+      break;
+    case "turn.token":
+      if (_draftBody && msg.text) {
+        _draftBody.textContent += msg.text;
+        dialogue.scrollTop = dialogue.scrollHeight;
+      }
+      break;
     case "turn.final":
       _turnOpen = false;
-      if (_draftingNode) { _draftingNode.remove(); _draftingNode = null; }
       const d = msg.data;
-      const src =
-        renderLangChip(d.lang) +
-        (d.citations?.length
-          ? `<span class="chip">src: ${d.citations.map((c) => c.tool.split(".").pop()).join(" · ")}</span>`
-          : "") +
-        `<span class="chip">${d.elapsed_ms} ms</span>`;
-      addMessage({ who: "agent", text: d.text, lang: d.lang?.primary_lang, srcFooter: src });
+      if (_draftingNode && _draftBody) {
+        // If streaming produced text, keep it; otherwise fall back to final text.
+        if (!_draftBody.textContent.trim()) _draftBody.textContent = d.text || "";
+        _draftBody.classList.remove("streaming");
+        // Append source footer to the drafting message rather than creating a new one.
+        const foot = document.createElement("div");
+        foot.className = "footer-src";
+        foot.innerHTML =
+          renderLangChip(d.lang) +
+          (d.citations?.length
+            ? `<span class="chip">src: ${d.citations.map((c) => c.tool.split(".").pop()).join(" · ")}</span>`
+            : "") +
+          `<span class="chip">${d.elapsed_ms} ms</span>`;
+        _draftingNode.append(foot);
+      } else {
+        addMessage({ who: "agent", text: d.text, lang: d.lang?.primary_lang });
+      }
+      _draftingNode = null;
+      _draftBody = null;
       break;
     case "error":
       addMessage({ who: "system", text: `error · ${msg.message}` });
@@ -138,7 +172,7 @@ ws.addEventListener("message", (ev) => {
   }
 });
 
-let _draftingNode = null;
+let _draftingNode = null;  // the message element currently being streamed into
 
 // --- input ----------------------------------------------------------------
 input.addEventListener("keydown", (ev) => {

@@ -110,6 +110,13 @@ main {
 .dialogue .meta .time { margin-left: 8px; }
 .dialogue .meta .lang { margin-left: 8px; }
 .dialogue .body { white-space: pre-wrap; word-wrap: break-word; }
+.dialogue .body.streaming::after {
+  content: "▌";
+  color: var(--accent);
+  margin-left: 2px;
+  animation: blink 0.8s steps(2, start) infinite;
+}
+@keyframes blink { to { visibility: hidden; } }
 .dialogue .agent { border-left: 2px solid var(--accent); padding-left: 14px; }
 .dialogue .system .body { color: var(--muted); font-style: italic; }
 .dialogue .footer-src {
