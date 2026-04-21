@@ -88,6 +88,65 @@ Single accent per palette. No gradients. No drop shadows.
 - **Language coverage chip** (inline at response bottom) — `native: yue ⁄ 繁體` or `translated: jpn → 繁體`.
 - **Warning strip** — sits at the top of the dialogue pane only when a HKO warning is active. Full-width, alert colour, text UPPERCASE (`TYPHOON SIGNAL 8 · HKO 14:00`).
 - **Input** — single-row text field, 1 px hairline top, monospace, prompt glyph `≥ ` as placeholder. Enter sends. No send button unless keyboard is unavailable.
+- **Language selector** — see next section.
+
+## Language selector
+
+Fixed component in the top-right of the header, left of the session id. Default value is `auto` — the language router decides per turn. Manually selecting a language **locks** both the input-interpretation hint and the output language until the user either changes it or resets to `auto`.
+
+### Behaviour
+
+- **auto** (default): router runs per turn; response footer shows the detected language and whether translation was applied.
+- **explicit pick** (e.g. `yue`): router is bypassed; the picked language is treated as authoritative for this and all subsequent turns in the session. The chip in the footer reads `forced: <lang>` instead of `detected:`.
+- Picking a language data.gov.hk does not natively serve (e.g. `jpn`) turns on the translation-fallback path for every tool call until the selector changes.
+- Reset to `auto` from a keyboard shortcut (`⌘ + ⇧ + L` / `Ctrl + Shift + L`) or by clicking the label `[lang:]` itself.
+- Current selection persists per-session (carried in `SessionSlots.locale`) and survives reconnect.
+
+### Visual
+
+```
+LAB_SRL · SMART_CITY_INTEGRATION · v0          [lang: auto ▾]    [session: 6f3a…]
+```
+
+- Rendered as `[lang: <value> ▾]`. Value is lowercase ISO (`auto`, `yue`, `zh-Hant`, `zh-Hans`, `en`, `ja`, `ko`, `fr`, `de`, `es`, `th`, `tl`, `id`, `vi`, `…more`).
+- Same hairline / UPPERCASE letter-spaced chrome as the rest of the header. No background fill; accent colour on hover and focus.
+- Dropdown panel: monospace, hairline rules between items, each row `<code>   <display name>` e.g. `yue   廣東話`. Always shown in the item's own script (廣東話, 日本語, 한국어) — not transliterated.
+- Selected state: a small `·` before the code (`· yue`) — no checkmark, no flourish.
+
+### Option list (v0.1)
+
+Priority-first ordering. The `…more` entry opens a second tier covering the remaining fastText-supported languages.
+
+| Code | Display | Path |
+|---|---|---|
+| `auto` | auto · 自動 | router decides |
+| `yue` | 廣東話 | **priority** · fallback via translation (no native support on data.gov.hk) |
+| `zh-Hant` | 繁體中文 | native (most datasets) |
+| `zh-Hans` | 简体中文 | native (many datasets) |
+| `en` | English | native (universal) |
+| `ja` | 日本語 | fallback |
+| `ko` | 한국어 | fallback |
+| `fr` | Français | fallback |
+| `de` | Deutsch | fallback |
+| `es` | Español | fallback |
+| `th` | ไทย | fallback |
+| `tl` | Tagalog | fallback |
+| `id` | Bahasa Indonesia | fallback |
+| `vi` | Tiếng Việt | fallback |
+| `…more` | — | opens full fastText list, grouped by script |
+
+### Accessibility
+
+- Native `<select>` for fidelity with assistive tech (styled via CSS; `appearance: none`).
+- `aria-label="chat language"`; each `<option>` has `lang="<code>"` so screen readers pronounce the display name correctly.
+- Keyboard: `Tab` reaches it, `Enter`/`Space` opens, arrows navigate, `Esc` closes.
+
+### Server contract
+
+- `POST /turn` accepts an optional `locale_override: "<code>" | "auto"` field in the body.
+- WebSocket `set_locale` event: `{"type":"set_locale","locale":"yue"}` — server acks with `{"type":"locale_set","locale":"yue","at":"<iso>"}`.
+- Server state: `SessionSlots.locale.source = "user"` when user-picked; `"auto"` when auto.
+- When `locale_override` changes mid-session, the agent **acknowledges** the switch in the next reply ("switched to 廣東話") in the newly selected language, then continues normally.
 
 ## Motion
 

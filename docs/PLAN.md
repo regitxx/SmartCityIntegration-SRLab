@@ -57,7 +57,7 @@ This plan breaks the system into phased, shippable spikes. Each phase has a demo
   - `transport.plan_multimodal_route` — backed by a locally deployed **OpenTripPlanner 2** with today's HK GTFS. (`otp.jar` as a sidecar process, not in-process.)
   - `meta.ask_user`
 - FastAPI `/ws/:session_id` WebSocket emitting `tool_call.*` + `token` + `final` events.
-- Minimal browser chat UI: single static page (vanilla JS + WebSocket), two-pane layout (dialogue + tool trace), styled per `docs/architecture/UI_STYLE.md` ("archive underground" aesthetic — monospace, near-black surface, single amber accent, no chat bubbles, source footers on every agent reply).
+- Minimal browser chat UI: single static page (vanilla JS + WebSocket), two-pane layout (dialogue + tool trace), styled per `docs/architecture/UI_STYLE.md` ("archive underground" aesthetic — monospace, near-black surface, single amber accent, no chat bubbles, source footers on every agent reply). Includes a **language selector** (`auto` default, explicit override for any supported language) wired to `SessionSlots.locale` and acknowledged by the agent on switch.
 - Observability: OpenLLMetry SDK wrapping the OpenAI client; Langfuse optional at this phase (stand up in Phase 2).
 
 **Golden set v0.1 — 30 queries, two buckets.** Covers both the *native* data.gov.hk language path (EN / 繁體 / 简体) and the *translation-fallback* path (every other language + Cantonese, which data.gov.hk does not natively serve).
