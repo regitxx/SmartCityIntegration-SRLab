@@ -1,0 +1,81 @@
+{
+  "version": "2026-04",
+  "source": "MTR system map; station codes match data/mtr_stations.json",
+  "lines": {
+    "ISL": {
+      "name_en": "Island Line",
+      "name_tc": "港島綫",
+      "stations": [
+        "KET","HKU","SYP","SHW","CEN","ADM","WAC","CAB","TIH","FOH",
+        "NOP","QUB","TAK","SWH","SKW","HFC","CHW"
+      ]
+    },
+    "TWL": {
+      "name_en": "Tsuen Wan Line",
+      "name_tc": "荃灣綫",
+      "stations": [
+        "TSW","TWH","KWH","KWF","LAK","MEF","LCK","CSW","SSP","PRE",
+        "MOK","YMT","JOR","TST","ADM","CEN"
+      ]
+    },
+    "KTL": {
+      "name_en": "Kwun Tong Line",
+      "name_tc": "觀塘綫",
+      "stations": [
+        "TIK","YAT","LAT","KWT","NTK","KOB","CHH","DIH","WTS","LOF",
+        "KOT","SKM","PRE","MOK","YMT","HOM","WKS"
+      ]
+    },
+    "EAL": {
+      "name_en": "East Rail Line",
+      "name_tc": "東鐵綫",
+      "stations": [
+        "ADM","EXC","HUH","MKK","KOT","TAW","SHT","FOT","UNI","TAP",
+        "TWO","FAN","SHS","LOW"
+      ],
+      "branches": {
+        "LMC": ["SHS","LMC"],
+        "RAC": ["FOT","RAC"]
+      }
+    },
+    "TKL": {
+      "name_en": "Tseung Kwan O Line",
+      "name_tc": "將軍澳綫",
+      "stations": ["POA","HAH","TKO","TIK","YAT","QUB","NOP"],
+      "branches": { "LHP": ["TKO","LHP"] }
+    },
+    "SIL": {
+      "name_en": "South Island Line",
+      "name_tc": "南港島綫",
+      "stations": ["ADM","OCP","WCH","LET","SOH"]
+    },
+    "TML": {
+      "name_en": "Tuen Ma Line",
+      "name_tc": "屯馬綫",
+      "stations": [
+        "TUM","SIH","TIS","LOP","YUL","KSR","TWW","MEF","NAC","AUS",
+        "ETS","HUH","HOM","KOT","HIK","TAW","CKT","STW","SHM","CIO","WKS"
+      ]
+    },
+    "TCL": {
+      "name_en": "Tung Chung Line",
+      "name_tc": "東涌綫",
+      "stations": ["HOK","KOW","OLY","NAC","LAK","TSY","SUN","TUC"]
+    },
+    "AEL": {
+      "name_en": "Airport Express",
+      "name_tc": "機場快綫",
+      "stations": ["HOK","KOW","TSY","AIR","AWE"]
+    },
+    "DRL": {
+      "name_en": "Disneyland Resort Line",
+      "name_tc": "迪士尼綫",
+      "stations": ["SUN","DIS"]
+    }
+  },
+  "notes": [
+    "Directions (UP/DOWN) are derived from list order: UP is the first-listed endpoint; DOWN is the last.",
+    "Interchange stations are stations that appear in more than one line's stations[] list.",
+    "Approximate inter-station runtime = 2 minutes; approximate interchange penalty = 5 minutes."
+  ]
+}
