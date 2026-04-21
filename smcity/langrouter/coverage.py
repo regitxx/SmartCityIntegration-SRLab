@@ -1,0 +1,73 @@
+"""Dataset language-coverage matrix.
+
+Source of truth for: "does upstream X natively accept language Y?".
+When the answer is no, the orchestrator routes through the translation
+fallback (in Phase 1a: let the LLM translate; Phase 2 adds NLLB-200).
+"""
+
+from __future__ import annotations
+
+from typing import Literal
+
+SupportedLang = Literal["en", "zh-Hant", "zh-Hans"]
+
+# Per-tool native language support, derived from docs/research/01_*.md and
+# docs/research/02_*.md. Keys are tool namespaces — see TOOL_CATALOG.md.
+DATASET_COVERAGE: dict[str, set[SupportedLang]] = {
+    # Transport — from 01_datagovhk_transport_apis.md
+    "transport.get_mtr_next_trains": {"en", "zh-Hant"},
+    "transport.get_kmb_eta_by_stop": {"en", "zh-Hant", "zh-Hans"},
+    "transport.get_citybus_eta_by_stop": {"en", "zh-Hant", "zh-Hans"},
+    "transport.find_stops_near_point": {"en", "zh-Hant", "zh-Hans"},
+    "transport.find_stops_by_name": {"en", "zh-Hant", "zh-Hans"},
+    # Context — from 02_datagovhk_housing_context_apis.md
+    "context.get_current_weather": {"en", "zh-Hant", "zh-Hans"},
+    "context.get_active_warnings": {"en", "zh-Hant", "zh-Hans"},
+    "context.get_aqhi": {"en", "zh-Hant"},
+    # Geo
+    "geo.address_lookup": {"en", "zh-Hant"},
+}
+
+# Maps our internal primary_lang codes → the user's query language tag to use
+# when calling upstream. Cantonese and Mandarin collapse to zh-Hant for the
+# native path; non-CJK defaults to en.
+_PRIMARY_TO_QUERY_LANG: dict[str, SupportedLang] = {
+    "yue": "zh-Hant",
+    "zho": "zh-Hant",  # refined below when script=Hans
+    "eng": "en",
+}
+
+
+def choose_query_lang(tool_name: str, primary_lang: str, script: str) -> tuple[SupportedLang, bool]:
+    """Pick the best language param for `tool_name` and flag if translation is needed.
+
+    Returns `(query_lang, translation_applied)`.
+    - `translation_applied=True` means the user wrote in a language the dataset
+      doesn't natively serve; the orchestrator will translate the query before
+      the tool call and translate the response back at the end.
+    """
+    supported = DATASET_COVERAGE.get(tool_name, {"en"})
+
+    # Cantonese is never natively served by data.gov.hk — map to the closest
+    # supported language and flag translation on.
+    if primary_lang == "yue":
+        if "zh-Hant" in supported:
+            return "zh-Hant", True
+        if "zh-Hans" in supported:
+            return "zh-Hans", True
+        return "en", True
+
+    # Natively supported path for Mandarin + English.
+    direct = _PRIMARY_TO_QUERY_LANG.get(primary_lang)
+    if primary_lang == "zho" and script == "Hans":
+        direct = "zh-Hans"
+    if direct and direct in supported:
+        return direct, False
+
+    # Fallback to English with translation flag.
+    return "en", True
+
+
+def is_natively_supported(tool_name: str, primary_lang: str, script: str) -> bool:
+    _, translated = choose_query_lang(tool_name, primary_lang, script)
+    return not translated

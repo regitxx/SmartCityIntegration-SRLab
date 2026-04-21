@@ -1,5 +1,5 @@
-// archive underground · Phase 0 UI shell
-// Wires: language selector, WebSocket to /ws/:session_id, minimal message rendering.
+// archive underground · Phase 1a UI client
+// Wires: language selector + WebSocket to /ws/:session_id + live tool_call events + final message render.
 
 const SESSION_ID = (() => {
   const key = "smcity.session";
@@ -18,6 +18,8 @@ const trace = $("#trace");
 const langSelect = $("#lang");
 $("#session-id").textContent = SESSION_ID;
 
+const STATUS_GLYPH = { ok: "✓", error: "!", timeout: "⏱", rate_limited: "⧖", skipped: "·" };
+
 function hhmmss(d = new Date()) {
   return d.toTimeString().slice(0, 8);
 }
@@ -31,7 +33,7 @@ function addMessage({ who, text, lang, srcFooter }) {
   meta.innerHTML = `<span class="who">${glyph} ${who}</span><span class="time">${hhmmss()}</span>${lang ? `<span class="lang">${lang}</span>` : ""}`;
   const body = document.createElement("div");
   body.className = "body";
-  if (lang) body.setAttribute("lang", lang.replace("yue", "yue").replace("zh-Hant", "zh-Hant"));
+  if (lang) body.setAttribute("lang", lang);
   body.textContent = text;
   msg.append(meta, body);
   if (srcFooter) {
@@ -45,20 +47,40 @@ function addMessage({ who, text, lang, srcFooter }) {
   return msg;
 }
 
-function addTraceEntry(entry) {
+let _traceCursor = 0;
+let _turnOpen = false;
+
+function resetTrace() {
+  trace.innerHTML = "";
+  _traceCursor = 0;
+}
+
+function addTraceStart({ name, args, query_lang }) {
+  _traceCursor += 1;
   const li = document.createElement("li");
-  const { index, name, args, status, latency_ms } = entry;
-  li.innerHTML = `<span class="idx">[${String(index).padStart(2, "0")}]</span><span class="name">${name}</span><span class="args">${args ? JSON.stringify(args) : ""}</span><span class="status ${status}">· ${status}</span><span class="latency">· ${latency_ms} ms</span>`;
+  li.dataset.tool = name;
+  li.dataset.idx = String(_traceCursor);
+  li.innerHTML = `<span class="idx">[${String(_traceCursor).padStart(2, "0")}]</span><span class="name">${name}</span><span class="args">${args ? JSON.stringify(args) : ""}</span><span class="status running">· running${query_lang ? ` · lang=${query_lang}` : ""}</span>`;
   trace.append(li);
+  trace.scrollTop = trace.scrollHeight;
+}
+
+function addTraceResult({ name, status, latency_ms, error }) {
+  const open = [...trace.querySelectorAll("li")].reverse().find(
+    (li) => li.dataset.tool === name && li.querySelector(".status.running")
+  );
+  if (!open) return;
+  const glyph = STATUS_GLYPH[status] || "?";
+  open.querySelector(".status").className = `status ${status}`;
+  open.querySelector(".status").textContent = `· ${glyph} ${status} · ${latency_ms} ms${error ? ` · ${error}` : ""}`;
 }
 
 function renderLangChip(langInfo) {
   if (!langInfo) return "";
   const { source, primary_lang, translation_applied } = langInfo;
-  const chip = translation_applied
+  return translation_applied
     ? `<span class="chip translated">translated: ${primary_lang}</span>`
     : `<span class="chip native">${source}: ${primary_lang}</span>`;
-  return chip;
 }
 
 // --- WebSocket wiring ------------------------------------------------------
@@ -78,35 +100,37 @@ ws.addEventListener("message", (ev) => {
   try { msg = JSON.parse(ev.data); } catch { return; }
   switch (msg.type) {
     case "ready":
-      addMessage({
-        who: "system",
-        text: `ready · ${msg.model} · ${hhmmss(new Date(msg.ts))} HKT`,
-      });
+      addMessage({ who: "system", text: `ready · ${msg.model} · ${hhmmss(new Date(msg.ts))} HKT` });
       break;
     case "locale_set":
       addMessage({ who: "system", text: `locale → ${msg.locale}` });
       break;
     case "turn.start":
-      _draftingNode = addMessage({ who: "agent", text: "drafting…" });
+      _turnOpen = true;
+      resetTrace();
+      _draftingNode = addMessage({
+        who: "agent",
+        text: "drafting…",
+        lang: msg.detected_lang,
+      });
+      break;
+    case "tool_call.start":
+      addTraceStart(msg);
+      break;
+    case "tool_call.result":
+      addTraceResult(msg);
       break;
     case "turn.final":
-      if (_draftingNode) {
-        _draftingNode.remove();
-        _draftingNode = null;
-      }
+      _turnOpen = false;
+      if (_draftingNode) { _draftingNode.remove(); _draftingNode = null; }
       const d = msg.data;
-      addMessage({
-        who: "agent",
-        text: d.text,
-        lang: d.lang?.primary_lang,
-        srcFooter:
-          renderLangChip(d.lang) +
-          (d.citations?.length
-            ? `<span class="chip">src: ${d.citations.map((c) => c.tool).join(" · ")}</span>`
-            : "") +
-          `<span class="chip">${d.elapsed_ms} ms</span>`,
-      });
-      (d.tool_trace || []).forEach(addTraceEntry);
+      const src =
+        renderLangChip(d.lang) +
+        (d.citations?.length
+          ? `<span class="chip">src: ${d.citations.map((c) => c.tool.split(".").pop()).join(" · ")}</span>`
+          : "") +
+        `<span class="chip">${d.elapsed_ms} ms</span>`;
+      addMessage({ who: "agent", text: d.text, lang: d.lang?.primary_lang, srcFooter: src });
       break;
     case "error":
       addMessage({ who: "system", text: `error · ${msg.message}` });
@@ -116,7 +140,7 @@ ws.addEventListener("message", (ev) => {
 
 let _draftingNode = null;
 
-// --- input -----------------------------------------------------------------
+// --- input ----------------------------------------------------------------
 input.addEventListener("keydown", (ev) => {
   if (ev.key !== "Enter" || ev.shiftKey) return;
   ev.preventDefault();
@@ -132,7 +156,7 @@ input.addEventListener("keydown", (ev) => {
   input.value = "";
 });
 
-// --- language selector -----------------------------------------------------
+// --- language selector ----------------------------------------------------
 langSelect.addEventListener("change", () => {
   if (ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({ type: "set_locale", locale: langSelect.value }));

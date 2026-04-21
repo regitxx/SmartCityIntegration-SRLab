@@ -1,16 +1,16 @@
-"""FastAPI entry point — Phase 0 skeleton.
+"""FastAPI entry point — Phase 1a.
 
 - `GET /health` — liveness + LM Studio reachability.
-- `POST /turn` — one-shot: calls LM Studio with a minimal system prompt and returns the reply.
-- `GET /ws/{session_id}` — WebSocket echo + `set_locale` event (real orchestrator lands in Phase 1).
+- `POST /turn` — one-shot, orchestrator-backed.
+- `GET /ws/{session_id}` — WebSocket: emits tool_call.start / tool_call.result
+  events live while the agent is working.
 - `GET /` — serves the static `web/` UI shell.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import time
-import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -23,20 +23,16 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from smcity import __version__
-from smcity.llm import LLMError, chat, ping
-from smcity.schemas import (
-    Citation,
-    Health,
-    LanguageCoverage,
-    ToolTraceEntry,
-    TurnRequest,
-    TurnResponse,
-)
+from smcity.llm import ping
+from smcity.orchestrator import Orchestrator, TurnEvent
+from smcity.schemas import Health, TurnRequest, TurnResponse
+from smcity.session import SessionStore
 from smcity.settings import get_settings
 
 log = structlog.get_logger("smcity")
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
+DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "sessions.sqlite3"
 
 
 def _configure_logging() -> None:
@@ -56,6 +52,11 @@ def _configure_logging() -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _configure_logging()
     s = get_settings()
+    DEFAULT_DB.parent.mkdir(parents=True, exist_ok=True)
+    store = SessionStore(DEFAULT_DB)
+    orchestrator = Orchestrator(store)
+    app.state.store = store
+    app.state.orchestrator = orchestrator
     log.info("startup", base_url=s.llm_base_url, model=s.llm_model, version=__version__)
     yield
     log.info("shutdown")
@@ -64,12 +65,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="smcity",
     version=__version__,
-    description="HK Smart City agent — Phase 0 skeleton",
+    description="HK Smart City agent — Phase 1a",
     lifespan=lifespan,
 )
 
 
-# ---- HTTP endpoints --------------------------------------------------------
+# ---- HTTP endpoints ------------------------------------------------------
 
 
 @app.get("/health", response_model=Health)
@@ -85,62 +86,19 @@ async def health() -> Health:
     )
 
 
-_PHASE0_SYSTEM_PROMPT = (
-    "You are the HK Smart City lab assistant, v0 scaffold. "
-    "No tools are wired yet. Answer in the user's language. "
-    "Keep replies under 2 sentences. If asked about transport or housing, "
-    "say the real tools will arrive in Phase 1."
-)
-
-
 @app.post("/turn", response_model=TurnResponse)
 async def turn(req: TurnRequest) -> TurnResponse:
-    started = time.perf_counter()
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _PHASE0_SYSTEM_PROMPT},
-        {"role": "user", "content": req.text},
-    ]
-
-    forced = req.locale_override is not None and req.locale_override != "auto"
-    reply_text: str
-    tool_trace: list[ToolTraceEntry] = []
-    citations: list[Citation] = []
-
-    try:
-        reply = await chat(messages)
-        reply_text = reply.text or "(no reply)"
-        log.info(
-            "turn_llm_ok",
-            session=req.session_id,
-            llm_ms=reply.elapsed_ms,
-            usage=reply.usage,
-        )
-    except LLMError as err:
-        log.warning("turn_llm_error", session=req.session_id, err=str(err))
-        reply_text = "(LM Studio unreachable — check Tailscale and the model on the Mac Studio)"
-
-    elapsed_ms = int((time.perf_counter() - started) * 1000)
-    return TurnResponse(
-        session_id=req.session_id,
-        text=reply_text,
-        lang=LanguageCoverage(
-            source="forced" if forced else "detected",
-            primary_lang=req.locale_override or "auto",
-            upstream_langs_available=[],
-            translation_applied=False,
-        ),
-        citations=citations,
-        tool_trace=tool_trace,
-        elapsed_ms=elapsed_ms,
-    )
+    orchestrator: Orchestrator = app.state.orchestrator
+    return await orchestrator.handle_turn(req)
 
 
-# ---- WebSocket ------------------------------------------------------------
+# ---- WebSocket -----------------------------------------------------------
 
 
 @app.websocket("/ws/{session_id}")
 async def ws(session_id: str, websocket: WebSocket) -> None:
     await websocket.accept()
+    orchestrator: Orchestrator = app.state.orchestrator
     await websocket.send_json(
         {
             "type": "ready",
@@ -168,14 +126,9 @@ async def ws(session_id: str, websocket: WebSocket) -> None:
                         "locale_override": msg.get("locale_override"),
                     }
                 )
-                await websocket.send_json(
-                    {
-                        "type": "turn.start",
-                        "turn_id": _turn_id(),
-                        "at": _iso_now(),
-                    }
-                )
-                resp = await turn(req)
+
+                emitter = _ws_emitter(websocket)
+                resp = await orchestrator.handle_turn(req, emit=emitter)
                 await websocket.send_json(
                     {"type": "turn.final", "at": _iso_now(), "data": resp.model_dump(mode="json")}
                 )
@@ -185,7 +138,22 @@ async def ws(session_id: str, websocket: WebSocket) -> None:
         log.info("ws_disconnect", session=session_id)
 
 
-# ---- Static UI ------------------------------------------------------------
+def _ws_emitter(websocket: WebSocket) -> Any:
+    """Return a sync callable that schedules `websocket.send_json` on the running loop."""
+    loop = asyncio.get_running_loop()
+
+    def emit(event: TurnEvent) -> None:
+        # turn.final is sent by the enclosing handler once the response is assembled;
+        # we push only interim events here.
+        if event.type == "turn.final":
+            return
+        payload = {"type": event.type, "at": _iso_now(), **event.data}
+        asyncio.run_coroutine_threadsafe(websocket.send_json(payload), loop)
+
+    return emit
+
+
+# ---- Static UI -----------------------------------------------------------
 
 if WEB_ROOT.exists():
     app.mount("/assets", StaticFiles(directory=WEB_ROOT, html=False), name="assets")
@@ -199,12 +167,8 @@ async def index() -> FileResponse | JSONResponse:
     return FileResponse(index_path)
 
 
-# ---- helpers ---------------------------------------------------------------
+# ---- helpers -------------------------------------------------------------
 
 
 def _iso_now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _turn_id() -> str:
-    return uuid.uuid4().hex[:12]

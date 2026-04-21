@@ -2,21 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
-from collections.abc import Iterator
 
 import httpx
 import pytest
-
-
-@pytest.fixture
-def event_loop() -> Iterator[asyncio.AbstractEventLoop]:
-    loop = asyncio.new_event_loop()
-    try:
-        yield loop
-    finally:
-        loop.close()
 
 
 def _lm_studio_reachable() -> bool:

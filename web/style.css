@@ -185,6 +185,8 @@ aside.trace {
 .trace-list li .name { color: var(--accent); }
 .trace-list li .status.ok { color: var(--affirm); }
 .trace-list li .status.error, .trace-list li .status.timeout { color: var(--alert); }
+.trace-list li .status.running { color: var(--accent); }
+.trace-list li .status.rate_limited { color: var(--alert); }
 .trace-list li .args { color: var(--muted); font-size: 11px; margin-left: 4px; }
 .trace-list li .latency { color: var(--muted); margin-left: 8px; }
 

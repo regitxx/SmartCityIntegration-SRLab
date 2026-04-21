@@ -16,6 +16,9 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     "msgspec>=0.18.0",
     "structlog>=24.4.0",
+    "aiosqlite>=0.20.0",
+    "rapidfuzz>=3.10.0",
+    "opencc-python-reimplemented>=0.1.7",
 ]
 
 [project.optional-dependencies]
