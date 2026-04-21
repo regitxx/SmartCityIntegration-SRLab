@@ -1,8 +1,27 @@
 # Implementation Plan — HK Smart City Agent
 
 **Project:** Smart City Integration · HK Lab of Social Robotics
-**Version:** 2026-04-21 · v0.1
-**Related:** `docs/GOAL.md` · `docs/architecture/ARCHITECTURE.md` · `docs/architecture/TOOL_CATALOG.md` · `docs/research/0{1–5}_*.md`
+**Version:** 2026-04-21 · v0.1 (shipped)
+**Related:** `docs/GOAL.md` · `docs/architecture/ARCHITECTURE.md` · `docs/architecture/TOOL_CATALOG.md` · `docs/PROTOCOL.md` · `docs/DEPLOY.md` · `docs/research/0{1–5}_*.md` · `CHANGELOG.md`
+
+---
+
+## Shipping status (as of 2026-04-21)
+
+| Phase | Status | Commit |
+|---|---|---|
+| Phase 0 — scaffold | ✅ shipped | `9bfe31e` |
+| Phase 1a — language router + session + 7 tools + orchestrator | ✅ shipped | `f86bf50` |
+| Phase 1b — KMB + Citybus + facilities + housing | ✅ shipped | `68a8c6f` |
+| Phase 2a — streaming + fast-path classifier + KV pin + language-stick | ✅ shipped | `7e13b30` |
+| Phase 2b — Cantonese polish (few-shot + deterministic post-pass) | ✅ shipped | `482e944` |
+| Phase 2c — walk + MTR multimodal planner | ✅ shipped | `06db3e5` |
+| Phase 5 — docs + protocol + deploy + v0.1.0 tag | ✅ shipped | this commit |
+| Phase 3 — scope refinement (housing eligibility flow) | ⏳ on hold | not planned for v0 |
+| Phase 4 — advanced latency (speculative decoding + pre-classifier v2) | ⏳ deferred | needs second model load |
+| Phase 6 stretch — OTP2, NLLB-200, HIT-TMG/LID-HK, Qwen2.5 polish | ⏳ deferred | separate sessions each |
+
+---
 
 This plan breaks the system into phased, shippable spikes. Each phase has a demo target the user can actually run, a clean acceptance criterion, and explicit "what I need from you" blockers.
 
