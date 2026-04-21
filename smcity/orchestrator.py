@@ -22,9 +22,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from smcity.classifier import FastPathHit, classify
+from smcity.cantonese_polish import polish as polish_cantonese
+from smcity.classifier import classify
 from smcity.langrouter import DATASET_COVERAGE, LangDetection, choose_query_lang, detect
 from smcity.llm import LLMError, chat, chat_stream
+from smcity.prompts import (
+    SYSTEM_PROMPT,
+    cantonese_style_block,
+    fast_path_synthesis_hint,
+    language_stick_reminder,
+    locale_hint,
+)
 from smcity.schemas import (
     Citation,
     LanguageCoverage,
@@ -36,36 +44,6 @@ from smcity.session import SessionStore, redact_pii
 from smcity.slots import Locale, SessionSlots
 from smcity.tools import ToolRegistry, build_default_registry
 from smcity.tools.registry import ToolContext, ToolResult
-
-# --- system prompt --------------------------------------------------------
-
-_SYSTEM_PROMPT = """You are the Hong Kong smart-city assistant for the Lab of \
-Social Robotics. You help users with transportation (MTR, KMB/LWB bus, Citybus, \
-minibus, tram, ferry, taxi, walking), public facilities (LCSD courts + pools), \
-public housing (HKHA estates), weather, air quality, and related HK questions \
-in any language.
-
-Principles:
-- Cantonese is the priority language. When the user writes in Cantonese, reply \
-in natural written Cantonese (using 嘅 / 喺 / 咗 / 冇 / 佢 / 唔 etc.). Never \
-silently switch to Mandarin.
-- Answer in the user's language. Tool output is often bilingual — that is data, \
-not a language cue. Do not switch language after seeing Chinese characters in \
-tool results.
-- Every factual claim about HK city state comes from a tool call. Do not \
-invent MTR stations, bus routes, weather numbers, AQHI bands, or addresses.
-- When origin / destination / transport mode / venue type is missing or \
-ambiguous, call meta.ask_user with ONE short question. Do not ask multiple \
-questions in one turn.
-- For travel queries, parallelise context tools (weather + warnings + AQHI) \
-with the transport tool in ONE tool-calls batch.
-- Keep final replies short (2-4 sentences) unless the user asks for detail.
-- At the end of every user-facing reply, include a one-line source footer \
-such as "src: mtr_next_trains / hko_warnings / 14:03".
-
-Tools are listed separately. Call them when useful; answer directly only for \
-conversational pleasantries."""
-
 
 # --- events emitted to the WebSocket --------------------------------------
 
@@ -169,13 +147,18 @@ class Orchestrator:
 
             # Single streaming LLM hop to synthesise the final reply from tool data.
             messages = self._build_messages(safe_text, detection, forced, include_tools=False)
+            serialised = "\n".join(
+                f"- {r.name}: {json.dumps(r.result, ensure_ascii=False) if r.result else r.error}"
+                for r in tool_results
+            )
             messages.append(
                 {
                     "role": "system",
-                    "content": _fast_path_synthesis_hint(fast_hit, tool_results, detection),
+                    "content": fast_path_synthesis_hint(fast_hit.intent, serialised, detection),
                 }
             )
             reply_text = await self._stream_final(messages, req.session_id, _emit)
+            reply_text = _maybe_polish(reply_text, detection)
 
             await self._store.save(slots)
             response = self._build_response(
@@ -254,11 +237,13 @@ class Orchestrator:
                 )
             # Post-tool reminder — prevents the "Chinese in tool output pulled the
             # reply into Cantonese/Mandarin" register bug.
-            messages.append({"role": "system", "content": _language_stick_reminder(detection)})
+            messages.append({"role": "system", "content": language_stick_reminder(detection)})
 
             reply_text = await self._stream_final(messages, req.session_id, _emit)
+            reply_text = _maybe_polish(reply_text, detection)
         else:
             reply_text = first.text or "(empty reply)"
+            reply_text = _maybe_polish(reply_text, detection)
 
         if clarification:
             reply_text = clarification
@@ -288,10 +273,13 @@ class Orchestrator:
         include_tools: bool,
     ) -> list[dict[str, Any]]:
         msgs: list[dict[str, Any]] = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "system", "content": _locale_hint(detection, forced=forced)},
-            {"role": "user", "content": text},
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": locale_hint(detection, forced=forced)},
         ]
+        # Cantonese few-shot exemplars — only shown when the user wrote yue.
+        if detection.primary_lang == "yue":
+            msgs.append({"role": "system", "content": cantonese_style_block()})
+        msgs.append({"role": "user", "content": text})
         return msgs
 
     async def _stream_final(
@@ -444,44 +432,15 @@ class Orchestrator:
 # --- module-level helpers -------------------------------------------------
 
 
-def _locale_hint(d: LangDetection, *, forced: bool) -> str:
-    tone = "forced by the user" if forced else "detected"
-    return (
-        f"User language ({tone}): primary_lang={d.primary_lang!r} "
-        f"script={d.script!r} tts_locale={d.tts_locale!r}. "
-        "REPLY IN THIS LANGUAGE. If Cantonese (yue), use natural written "
-        "Cantonese with particles 嘅/喺/咗/冇/佢/唔. "
-        "Tool output will contain fields in multiple languages (name_en, "
-        "name_tc, name_sc) — those are DATA, not a cue to switch languages."
-    )
-
-
-def _language_stick_reminder(d: LangDetection) -> str:
-    return (
-        f"Now synthesise the final reply. REPLY LANGUAGE IS {d.primary_lang!r}. "
-        "Do not switch to Chinese or English because the tool output contained "
-        "bilingual fields. Pick fields in the user's language from the tool "
-        "response and form natural prose in that language only."
-    )
-
-
-def _fast_path_synthesis_hint(hit: FastPathHit, results: list[ToolResult], d: LangDetection) -> str:
-    bullets = [
-        f"- {r.name}: {json.dumps(r.result, ensure_ascii=False) if r.result else r.error}"
-        for r in results
-    ]
-    joined = "\n".join(bullets)
-    return (
-        f"FAST-PATH intent={hit.intent!r}. Tool results:\n{joined}\n\n"
-        f"Reply concisely in {d.primary_lang!r} ({d.tts_locale}). Include the "
-        "specific numbers and a one-line source footer."
-    )
+def _maybe_polish(text: str, detection: LangDetection) -> str:
+    """Apply the deterministic formal→colloquial Cantonese pass when yue."""
+    if detection.primary_lang != "yue":
+        return text
+    return polish_cantonese(text)
 
 
 def _localise_chitchat(canned: str, d: LangDetection) -> str:
-    # The chitchat table already returns one reply per language; if the user
-    # wrote Cantonese but hit an English branch (shouldn't happen), tag so the
-    # downstream formatter knows this was a fast-canned reply.
+    # Chitchat table returns a reply-per-language already; no extra logic needed.
     return canned
 
 
