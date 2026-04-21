@@ -23,6 +23,9 @@ DATASET_COVERAGE: dict[str, set[SupportedLang]] = {
     "transport.find_stops_near_point": {"en", "zh-Hant", "zh-Hans"},
     "transport.find_stops_by_name": {"en", "zh-Hant", "zh-Hans"},
     "transport.plan_simple_route": {"en", "zh-Hant"},
+    "transport.plan_walking_route": {"en", "zh-Hant"},
+    "transport.plan_taxi_estimate": {"en", "zh-Hant"},
+    "transport.plan_journey": {"en", "zh-Hant"},
     # Context — from 02_datagovhk_housing_context_apis.md
     "context.get_current_weather": {"en", "zh-Hant", "zh-Hans"},
     "context.get_active_warnings": {"en", "zh-Hant", "zh-Hans"},

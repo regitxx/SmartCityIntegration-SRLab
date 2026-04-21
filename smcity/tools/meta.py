@@ -1,16 +1,18 @@
 """Meta tools — not hitting any upstream, but registered so the LLM can call them.
 
-- `meta.ask_user`: the disambiguation gate. Returns a clarification question the
-  orchestrator will surface to the user.
-- `meta.what_languages_are_supported`: tells the user which languages each
-  upstream dataset actually serves.
+- `meta.ask_user`: the disambiguation gate.
+- `meta.what_languages_are_supported`: per-tool language coverage.
+- `meta.forget_me`: wipes the session record + clears conversation history.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import BaseModel, Field
 
 from smcity.langrouter.coverage import DATASET_COVERAGE
+from smcity.session import SessionStore
 from smcity.tools.registry import ToolContext, ToolSpec
 
 # --- ask_user --------------------------------------------------------------
@@ -96,5 +98,43 @@ WHAT_LANGUAGES_TOOL: ToolSpec[WhatLanguagesArgs, WhatLanguagesResult] = ToolSpec
     handler=_what_langs,
     ttl_seconds=24 * 60 * 60,
     budget_ms=50,
+    upstream="(internal)",
+)
+
+
+# --- forget_me -----------------------------------------------------------
+
+_DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "sessions.sqlite3"
+
+
+class ForgetMeArgs(BaseModel):
+    pass
+
+
+class ForgetMeResult(BaseModel):
+    ok: bool
+    session_id: str
+
+
+async def _forget_me(args: ForgetMeArgs, ctx: ToolContext) -> ForgetMeResult:
+    store = SessionStore(_DEFAULT_DB)
+    await store.forget(ctx.session_id)
+    return ForgetMeResult(ok=True, session_id=ctx.session_id)
+
+
+FORGET_ME_TOOL: ToolSpec[ForgetMeArgs, ForgetMeResult] = ToolSpec(
+    name="meta.forget_me",
+    description_en=(
+        "Wipe the current session's stored state (conversation history, slots, "
+        "locale). Call when the user explicitly asks to forget / reset / start "
+        "over / delete data. The user will need to re-introduce their origin / "
+        "destination on the next turn."
+    ),
+    args_schema=ForgetMeArgs,
+    result_schema=ForgetMeResult,
+    handler=_forget_me,
+    ttl_seconds=0,
+    budget_ms=200,
+    cacheable=False,
     upstream="(internal)",
 )

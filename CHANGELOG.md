@@ -2,6 +2,56 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.2.0] — 2026-04-21
+
+Closes the remaining transport-mode gaps that the live v0.1.0 session
+surfaced. The agent now answers "how do I get from X to Y?" in ONE call
+with walk + MTR + taxi side-by-side, handles walking-only queries
+cleanly, gives real HK taxi fare estimates, and supports explicit
+session wipe.
+
+### New tools (4; registry grew from 18 → 22)
+
+- **`transport.plan_journey`** — unified multimodal planner. Takes origin + destination (free-text via ALS or lat/lng), returns walk / MTR / taxi options side-by-side with durations + taxi fare range + recommendation. This is the new default for "how do I get from X to Y?" queries — no more mode-ask ping-pong.
+- **`transport.plan_walking_route`** — haversine-based walking estimate at 1.2 m/s HK-urban pace, with ALS geocoding when inputs are free-text. Fixes the v0.1.3 empty-reply regression on walking questions.
+- **`transport.plan_taxi_estimate`** — HK 2026 urban taxi tariff (HK$27 flag-down + HK$1.90 per 200 m), with a fare range for traffic/toll/off-peak variance. Road-distance proxy = haversine × 1.3.
+- **`meta.forget_me`** — deletes the session's SQLite row (slots, locale, history). Promised in Phase 0 but never implemented; now exposed as a tool the LLM calls on "forget me / reset / delete my data".
+
+### Pipeline updates
+
+- System prompt rewritten around per-mode tool routing:
+  - No-mode "from X to Y?" → `transport.plan_journey` (no clarification needed).
+  - MTR / 地鐵 / 港鐵 → `transport.plan_simple_route`.
+  - walk / 步行 → `transport.plan_walking_route`.
+  - taxi / 的士 → `transport.plan_taxi_estimate`.
+  - KMB / Citybus → operator-specific ETA tools.
+  - forget/reset/clear → `meta.forget_me`.
+- Coverage matrix updated to include all new tools (EN + 繁體).
+
+### Tests
+
+- 11 new unit tests in `tests/test_simple_modes.py`:
+  - Taxi fare formula parametrised across 5 distance buckets.
+  - Walking with lat/lng + with free-text (ALS-mocked).
+  - Taxi estimate on a short HK-Island trip.
+  - Journey planner: full three-mode payload + custom mode subset.
+  - `meta.forget_me`: roundtrip save → forget → verify wiped.
+- **156 unit tests green**, 7 live integration tests green, ruff + mypy strict clean across 49 source files.
+
+### Live verification
+
+| turn | tool | result |
+|---|---|---|
+| `"how do I get from Mong Kok to Sha Tin"` | `transport.plan_journey` (1025 ms) | Returned walk + MTR + taxi options; LLM synthesised a focused reply |
+| `"what about walking"` (same session) | `transport.plan_walking_route` | Specific walking distance + duration, not an empty collapse |
+| `"forget me"` | `meta.forget_me` | "Your data has been cleared. `src: forget_me`" |
+
+### Deferred
+
+- OpenTripPlanner 2 sidecar for bus + minibus + ferry + tram multimodal routing (heavier; own session).
+- NLLB-200 translation fallback (replaces LLM-as-MT for non-CJK).
+- HIT-TMG/LID-HK transformer for precise fr/de/tl/id/vi detection.
+
 ## [0.1.0] — 2026-04-21
 
 First end-to-end release. Cantonese-first agentic HK smart-city chat over data.gov.hk, running against `openai/gpt-oss-120b` via LM Studio on the lab's Mac Studio, reachable over Tailscale.
