@@ -1,0 +1,52 @@
+# Secrets / config
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# uv / pip
+.uv/
+
+# Data / runtime state
+*.sqlite
+*.sqlite3
+*.db
+data/
+logs/
+traces/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# OpenTripPlanner / Valhalla runtime
+otp/graph.obj
+otp/*.gtfs.zip
+otp/*.osm.pbf
+valhalla/tiles/
+
+# Langfuse / observability local
+langfuse/
