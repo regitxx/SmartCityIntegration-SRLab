@@ -126,6 +126,7 @@ class Orchestrator:
         # ---- fast path: chitchat = no tools, no LLM ----------------------
         if fast_hit and fast_hit.intent == "chitchat" and fast_hit.reply_if_chitchat:
             reply_text = _localise_chitchat(fast_hit.reply_if_chitchat, detection)
+            slots.append_turn(req.text, reply_text)
             await self._store.save(slots)
             response = self._build_response(
                 req,
@@ -146,7 +147,9 @@ class Orchestrator:
             self._append_trace_and_citations(tool_results, tool_trace, citations, detection)
 
             # Single streaming LLM hop to synthesise the final reply from tool data.
-            messages = self._build_messages(safe_text, detection, forced, include_tools=False)
+            messages = self._build_messages(
+                safe_text, detection, forced, slots, include_tools=False
+            )
             serialised = "\n".join(
                 f"- {r.name}: {json.dumps(r.result, ensure_ascii=False) if r.result else r.error}"
                 for r in tool_results
@@ -160,6 +163,7 @@ class Orchestrator:
             reply_text = await self._stream_final(messages, req.session_id, _emit)
             reply_text = _maybe_polish(reply_text, detection)
 
+            slots.append_turn(req.text, reply_text)
             await self._store.save(slots)
             response = self._build_response(
                 req,
@@ -175,7 +179,7 @@ class Orchestrator:
             return response
 
         # ---- full path: LLM picks tools, we execute, LLM synthesises -----
-        messages = self._build_messages(safe_text, detection, forced, include_tools=True)
+        messages = self._build_messages(safe_text, detection, forced, slots, include_tools=True)
 
         try:
             first = await chat(
@@ -186,6 +190,7 @@ class Orchestrator:
             )
         except LLMError as err:
             reply_text = "(LM Studio unreachable — check Tailscale and the Mac Studio)"
+            slots.append_turn(req.text, reply_text)
             await self._store.save(slots)
             response = self._build_response(
                 req,
@@ -248,6 +253,7 @@ class Orchestrator:
         if clarification:
             reply_text = clarification
 
+        slots.append_turn(req.text, reply_text)
         await self._store.save(slots)
         response = self._build_response(
             req,
@@ -269,6 +275,7 @@ class Orchestrator:
         text: str,
         detection: LangDetection,
         forced: bool,
+        slots: SessionSlots,
         *,
         include_tools: bool,
     ) -> list[dict[str, Any]]:
@@ -279,6 +286,10 @@ class Orchestrator:
         # Cantonese few-shot exemplars — only shown when the user wrote yue.
         if detection.primary_lang == "yue":
             msgs.append({"role": "system", "content": cantonese_style_block()})
+        # Prior conversation so the LLM remembers origin / destination / mode
+        # across turns.
+        for entry in slots.history:
+            msgs.append({"role": entry.role, "content": entry.content})
         msgs.append({"role": "user", "content": text})
         return msgs
 

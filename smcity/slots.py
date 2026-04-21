@@ -43,6 +43,20 @@ class Locale(BaseModel):
         )
 
 
+class HistoryMsg(BaseModel):
+    """One conversational turn as persisted between requests."""
+
+    role: Literal["user", "assistant"]
+    content: str
+    at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+# Keep this short — context tokens add to every turn's LLM bill and LM Studio's
+# KV cache churns when the prefix grows. 10 pairs = 20 messages = usually
+# enough for a multi-turn clarification flow without blowing the window.
+_MAX_HISTORY = 20
+
+
 class SessionSlots(BaseModel):
     session_id: str
     origin: LocationSlot | None = None
@@ -54,6 +68,7 @@ class SessionSlots(BaseModel):
     horizon: timedelta | None = None
     locale: Locale = Field(default_factory=Locale)
     user_location: UserLocation | None = None
+    history: list[HistoryMsg] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -65,6 +80,17 @@ class SessionSlots(BaseModel):
 
     def touch(self) -> None:
         self.updated_at = datetime.now(UTC)
+
+    def append_turn(self, user_text: str, assistant_text: str) -> None:
+        """Append one (user, assistant) pair and trim to the history cap."""
+        self.history.append(HistoryMsg(role="user", content=user_text))
+        self.history.append(HistoryMsg(role="assistant", content=assistant_text))
+        if len(self.history) > _MAX_HISTORY:
+            # Drop oldest first. Keep pairs aligned (an even cut).
+            overflow = len(self.history) - _MAX_HISTORY
+            if overflow % 2 == 1:
+                overflow += 1
+            self.history = self.history[overflow:]
 
 
 # --- clarify-vs-guess policy ---------------------------------------------
