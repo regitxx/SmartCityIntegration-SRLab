@@ -28,6 +28,24 @@ def test_bare_leak_transport_plan_simple_route() -> None:
     assert "transport_plan_simple_route" not in text  # stripped
 
 
+def test_bare_leak_recovers_dotted_tool_name_form() -> None:
+    """v0.4.7 regression: gpt-oss-120b in live runs emits the dotted form
+    (`transport.plan_journey json{...}`) which the underscored-only pattern
+    let through. Verify both forms are now stripped + recovered."""
+    leaked = 'transport.plan_journey json{"origin":"尖沙咀","destination":"中環"}'
+    text, calls = extract_harmony_tool_calls(
+        leaked,
+        known_tool_names={
+            "transport.plan_journey",
+            "transport.plan_simple_route",
+            "meta.ask_user",
+        },
+    )
+    assert calls, "dotted-form leak must now be caught"
+    assert calls[0]["name"] == "transport.plan_journey"
+    assert "transport.plan_journey" not in text  # stripped from reply
+
+
 def test_bare_leak_ignored_without_known_names() -> None:
     # Prose-style text mentioning a fake tool should NOT be mis-extracted.
     text, calls = extract_harmony_tool_calls(

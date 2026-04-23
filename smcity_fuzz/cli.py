@@ -74,6 +74,9 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         max_turns=args.turns,
         settings=settings,
         mode=args.mode,
+        sampling=args.sampling,
+        seed=args.seed,
+        progress=not args.no_progress,
     )
     print(f"run_id: {run_id}")
     print(summarise(rows, max_failures_shown=args.show))
@@ -166,6 +169,28 @@ def build_parser() -> argparse.ArgumentParser:
             "(WebSocket /ws/:session_id, captures TTFT + token count). "
             "Default http."
         ),
+    )
+    p_run.add_argument(
+        "--sampling",
+        choices=("ordered", "shuffled"),
+        default="shuffled",
+        help=(
+            "'ordered' iterates persona x topic x language in declaration order "
+            "(small budgets only see persona[0]). 'shuffled' (default) "
+            "randomises so --turns 40 samples across all personas + "
+            "languages. Pair with --seed for reproducibility."
+        ),
+    )
+    p_run.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for --sampling=shuffled (omit for fresh randomness per run).",
+    )
+    p_run.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Suppress per-turn progress output to stderr (default: enabled).",
     )
 
     p_report = sub.add_parser("report", help="Summarise a past campaign")

@@ -2,6 +2,38 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.7] — 2026-04-23
+
+**First real fuzz run uncovered a judge-blindness bug.** Kicked off a 3-turn smoke against live gpt-oss-120b (LM Studio on Mac Studio) + live smcity agent — 2/3 "failures" were actually the judge's fault: the `tool_trace` passed to it only carried `result_summary` strings like `"8 trains @ Central"`, not the underlying `next_trains[]` array with `ttnt` minutes. When the agent correctly synthesised "下一班 1 分鐘後到, 之後 5/9/12 分鐘" from the real tool output, the judge saw no numbers in the summary and flagged `hallucinated_fact` every time. Fixed.
+
+### The judge fix (most important change)
+
+- **`smcity/schemas.py`** — `ToolTraceEntry` now carries `result: dict | None` alongside `result_summary`. Populated on `status == "ok"`.
+- **`smcity/orchestrator.py`** — `_append_trace_and_citations` copies the raw result into the trace entry.
+- **`smcity_fuzz/judge.py`** — `_user_prompt` now renders the full result (JSON, truncated to 1500 chars past which it says `…(+N chars)`). Explicit new framing: "raw_result is the truth — summary is just a shorthand label".
+
+Before v0.4.7: any reply citing specific numbers got `hallucinated_fact` false-flagged. After: the judge can actually verify "is 1 minute in the next_trains list?".
+
+### UX improvements to the fuzzer
+
+- **Live per-turn progress** to stderr: `[ 1/40]  ok  yue      cantonese_senior   mtr_next_trains       7.8s  score=10/10`. Runs no longer look frozen for 10 minutes. `--no-progress` to suppress.
+- **Round-robin / shuffled sampling** (default): `run_campaign(sampling="shuffled", seed=None)`. Small `--turns` budgets now sample across all personas + languages instead of only the first persona. Previously `--turns 40` only exercised `cantonese_senior`; with shuffled sampling it touches all 5. Pass `--seed N` for reproducibility.
+- **Stricter synth language constraint**. Before: asking a "Cantonese senior" persona to write in English produced mostly Cantonese, which the judge (correctly) flagged `wrong_language`. Fixed with per-language `_STRICT_LANG_RULES` that are the LAST rule in the synth prompt and explicitly override the persona's implied native language.
+
+### CLI
+
+```
+uv run python -m smcity_fuzz run
+  --mode ws --turns 40 --concurrency 2
+  --sampling shuffled --seed 42      # reproducible matrix sampling
+  --no-progress                      # silence per-turn stderr (default: on)
+```
+
+### Gate
+
+- 252 unit + 7 integration tests still green, ruff + format + mypy strict clean.
+- Package built on disk as 0.4.7; live 40-turn campaign now in progress to get clean judge data.
+
 ## [0.4.6] — 2026-04-23
 
 **Response-accuracy scaffolding** — the user flagged that what matters isn't bug count, it's whether responses are actually good and factually accurate. This commit builds the accuracy-quality scaffolding so the fuzzer, the judge, and any future diagnostic session (Claude / Gemini) all grade the same way.

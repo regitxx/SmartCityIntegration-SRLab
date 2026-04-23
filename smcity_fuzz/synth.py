@@ -25,6 +25,36 @@ _LANG_LABELS: dict[LanguageCode, str] = {
     "en": "English",
 }
 
+# Strict one-line constraint appended after everything else. Previous
+# v0.4.x synth let the 20b drift — e.g. asking a "Cantonese senior" to
+# write in English produced mostly Cantonese output, which then got
+# labelled as "en" in the JSONL and the judge (correctly) flagged
+# wrong_language. Fixing by making the language constraint the LAST
+# and LOUDEST rule in the prompt.
+_STRICT_LANG_RULES: dict[LanguageCode, str] = {
+    "yue": (
+        "THE QUESTION MUST BE IN CANTONESE (yue). Traditional Chinese characters "
+        "with at least one colloquial particle from the set 嘅/喺/咗/冇/佢/唔/係/呀/啦. "
+        "No Mandarin 的/在/了/沒/是. No English sentences (single-word brand / station "
+        "names like MTR or 'Central' are fine)."
+    ),
+    "zho-Hant": (
+        "THE QUESTION MUST BE IN TRADITIONAL CHINESE, Mandarin register "
+        "(the/在/了/沒/是). Do NOT use Cantonese particles like 嘅/喺/咗/冇/唔. "
+        "Traditional characters only — do NOT use Simplified."
+    ),
+    "zho-Hans": (
+        "THE QUESTION MUST BE IN SIMPLIFIED CHINESE, Mainland Mandarin register. "
+        "Do NOT use Cantonese particles (嘅/喺/咗/冇/唔) even as code-switching. "
+        "Simplified characters only (e.g. 现在 not 現在)."
+    ),
+    "en": (
+        "THE QUESTION MUST BE IN ENGLISH. No Chinese characters except at most "
+        "ONE HK place name if natural (e.g. 'Tsim Sha Tsui', 'Mong Kok'). "
+        "Do NOT write any Cantonese/Mandarin sentence fragments."
+    ),
+}
+
 
 def _system_prompt(persona: Persona, topic: DatasetTopic, language: LanguageCode) -> str:
     hints = "\n".join(f"  - {h}" for h in persona.style_hints)
@@ -37,15 +67,17 @@ def _system_prompt(persona: Persona, topic: DatasetTopic, language: LanguageCode
         f"Phrasing notes:\n{hints}\n\n"
         f"TOPIC the user is curious about: {topic.title_en} ({topic.title_tc})\n"
         f"Topic description: {topic.description_en}\n\n"
-        f"LANGUAGE you must write in: {_LANG_LABELS[language]}\n\n"
-        "RULES:\n"
+        f"LANGUAGE: {_LANG_LABELS[language]}\n"
+        f"  LANGUAGE RULE: {_STRICT_LANG_RULES[language]}\n"
+        "  (The persona description may imply a different native language — "
+        "   IGNORE it. The LANGUAGE RULE above wins absolutely.)\n\n"
+        "OUTPUT RULES:\n"
         "1. Output ONE question only, no preamble, no quotes, no explanation.\n"
         "2. Vary phrasing every time — do NOT use template openings.\n"
-        "3. Write as the persona would naturally speak, including typos / "
-        "code-switching / shorthand where natural for that persona.\n"
-        "4. The question must be answerable with public HK open data — "
+        "3. The question must be answerable with public HK open data — "
         "DO NOT invent private or illegal asks.\n"
-        "5. Keep it under 40 words.\n"
+        "4. Keep it under 40 words.\n"
+        "5. End with exactly one question mark (? or ？).\n"
     )
 
 

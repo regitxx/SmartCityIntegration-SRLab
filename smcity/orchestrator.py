@@ -430,6 +430,7 @@ class Orchestrator:
                     status=res.status,  # type: ignore[arg-type]
                     latency_ms=res.latency_ms,
                     result_summary=_summarise(res),
+                    result=res.result if res.status == "ok" else None,
                 )
             )
             if res.status == "ok":

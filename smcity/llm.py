@@ -55,12 +55,22 @@ def _harmony_fn_to_tool(name: str, known_names: set[str] | None = None) -> str:
 
 def _bare_leak_pattern(known_tool_names: set[str]) -> re.Pattern[str] | None:
     """Match 'TOOL_NAME json {json-object}' leaks where TOOL_NAME is any
-    registered tool in its underscored form. Gated by the known-names set so
-    we don't false-positive on prose."""
+    registered tool in either its **dotted** (`transport.plan_journey`) or
+    **underscored** (`transport_plan_journey`) form. Gated by the
+    known-names set so we don't false-positive on prose.
+
+    Earlier (v0.4.x) versions matched only the underscored form — 20-turn
+    live fuzz runs proved gpt-oss-120b frequently emits the dotted form
+    verbatim in reply text, slipping past the sanitiser and producing
+    `empty_reply` failures. Matching both forms closes that gap.
+    """
     if not known_tool_names:
         return None
-    underscored = [n.replace(".", "_") for n in known_tool_names]
-    alternatives = "|".join(re.escape(n) for n in sorted(underscored, key=len, reverse=True))
+    variants: set[str] = set()
+    for name in known_tool_names:
+        variants.add(name)  # dotted
+        variants.add(name.replace(".", "_"))  # underscored
+    alternatives = "|".join(re.escape(v) for v in sorted(variants, key=len, reverse=True))
     # `TOOL_NAME` (opt. whitespace / punctuation) (opt. "json") (opt. whitespace)
     # `{ ... }` — minimal brace-balanced JSON (up to the first matching `}`).
     # We use a non-greedy match up to `}` and require the open brace to be an

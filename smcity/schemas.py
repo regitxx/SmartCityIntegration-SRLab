@@ -48,6 +48,11 @@ class ToolTraceEntry(BaseModel):
     status: Literal["ok", "error", "timeout", "rate_limited", "skipped"]
     latency_ms: int
     result_summary: str | None = None
+    # Full normalised tool result — populated on status=="ok". Consumers
+    # (fuzz judge, UI debug panel, post-hoc grading) use this to verify
+    # the agent's claims against what the tool actually returned; the
+    # human-readable `result_summary` is kept separately for chat-UI tooltips.
+    result: dict[str, object] | None = None
 
 
 class LanguageCoverage(BaseModel):

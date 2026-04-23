@@ -18,7 +18,10 @@ campaign never aborts on a single bad turn.
 from __future__ import annotations
 
 import asyncio
+import random
 import secrets
+import sys
+import time
 from collections.abc import Iterator
 from typing import Any, Literal
 
@@ -33,6 +36,7 @@ from smcity_fuzz.synth import SynthError, synthesise_question
 from smcity_fuzz.ws_transport import WsTransportError, drive_turn_via_ws
 
 TransportMode = Literal["http", "ws"]
+SamplingMode = Literal["ordered", "shuffled"]
 
 
 def _new_run_id() -> str:
@@ -43,11 +47,57 @@ def _matrix(
     personas: tuple[Persona, ...],
     topics: tuple[DatasetTopic, ...],
     languages: tuple[LanguageCode, ...],
+    *,
+    sampling: SamplingMode = "shuffled",
+    seed: int | None = None,
 ) -> Iterator[tuple[Persona, DatasetTopic, LanguageCode]]:
-    for p in personas:
-        for t in topics:
-            for lang in languages:
-                yield p, t, lang
+    """Enumerate matrix cells.
+
+    `ordered` — (persona, topic, language) triple-nested loop. Deterministic
+    but small `--turns` budgets only see the first persona.
+
+    `shuffled` (default) — same cells, shuffled with a deterministic seed so
+    `--turns 40` samples across all personas and languages. Default seed
+    derived from `secrets.randbits` so runs vary unless you pin `--seed`.
+    """
+    cells = [(p, t, lang) for p in personas for t in topics for lang in languages]
+    if sampling == "shuffled":
+        # Non-cryptographic shuffle — we just want reproducible sampling.
+        rng = random.Random(seed if seed is not None else secrets.randbits(32))  # noqa: S311
+        rng.shuffle(cells)
+    yield from cells
+
+
+def _progress(
+    *,
+    idx: int,
+    total: int,
+    persona: Persona,
+    language: LanguageCode,
+    topic: DatasetTopic,
+    started_at: float,
+    row: FuzzRow,
+) -> None:
+    """Emit one-line progress update to stderr — visible during the run."""
+    elapsed_s = time.monotonic() - started_at
+    if row.errors:
+        status = "FAIL"
+        tag = row.errors[0].split(":", 1)[0]
+    elif row.judge is None:
+        status = "????"
+        tag = "no-judge"
+    elif row.judge.failed:
+        status = "fail"
+        tag = ",".join(row.judge.failure_reasons) or f"score={row.judge.total_score}"
+    else:
+        status = " ok "
+        tag = f"score={row.judge.total_score}/10"
+    print(
+        f"[{idx:>3}/{total}] {status} {language:<8} {persona.id:<18} "
+        f"{topic.id:<22} {elapsed_s:>5.1f}s  {tag}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 async def _call_agent(
@@ -82,8 +132,12 @@ async def _one_turn(
     *,
     mode: TransportMode = "http",
     ws_connect: Any = None,
+    idx: int | None = None,
+    total: int | None = None,
+    emit_progress: bool = True,
 ) -> FuzzRow:
     async with sem:
+        turn_started = time.monotonic()
         row = FuzzRow(
             run_id=run_id,
             ts=iso_now(),
@@ -94,6 +148,18 @@ async def _one_turn(
             transport=mode,
         )
 
+        def _maybe_emit() -> None:
+            if emit_progress and idx is not None and total is not None:
+                _progress(
+                    idx=idx,
+                    total=total,
+                    persona=persona,
+                    language=language,
+                    topic=topic,
+                    started_at=turn_started,
+                    row=row,
+                )
+
         # --- synth ------------------------------------------------------
         try:
             row.question = await synthesise_question(
@@ -102,6 +168,7 @@ async def _one_turn(
         except SynthError as err:
             row.errors.append(f"synth:{err}")
             append_row(row, settings=s)
+            _maybe_emit()
             return row
 
         # --- agent call --------------------------------------------------
@@ -125,6 +192,7 @@ async def _one_turn(
             except WsTransportError as err:
                 row.errors.append(f"agent_ws:{err}")
                 append_row(row, settings=s)
+                _maybe_emit()
                 return row
         else:
             try:
@@ -135,6 +203,7 @@ async def _one_turn(
             except httpx.HTTPError as err:
                 row.errors.append(f"agent_http:{err}")
                 append_row(row, settings=s)
+                _maybe_emit()
                 return row
 
         # --- judge -------------------------------------------------------
@@ -146,6 +215,7 @@ async def _one_turn(
             row.errors.append(f"judge:{err}")
 
         append_row(row, settings=s)
+        _maybe_emit()
         return row
 
 
@@ -160,11 +230,20 @@ async def run_campaign(
     agent_client: httpx.AsyncClient | None = None,
     mode: TransportMode = "http",
     ws_connect: Any = None,
+    sampling: SamplingMode = "shuffled",
+    seed: int | None = None,
+    progress: bool = True,
 ) -> tuple[str, list[FuzzRow]]:
     """Run a fuzz campaign; return (run_id, rows).
 
     `mode="ws"` drives every turn via the WebSocket `/ws/{session_id}`
     streaming endpoint and captures TTFT + token count on each row.
+
+    `sampling="shuffled"` (default) makes small `--turns` budgets see all
+    personas + languages rather than only the first persona. Pass `seed`
+    for reproducible orderings.
+
+    `progress=True` (default) emits a one-line status to stderr per turn.
     """
     s = settings or get_fuzz_settings()
     run_id = _new_run_id()
@@ -176,12 +255,33 @@ async def run_campaign(
     ac = agent_client or httpx.AsyncClient(timeout=s.agent_timeout_s)
 
     try:
-        cells = list(_matrix(personas, topics, languages))
+        cells = list(_matrix(personas, topics, languages, sampling=sampling, seed=seed))
         if max_turns is not None:
             cells = cells[:max_turns]
+        total = len(cells)
+        if progress:
+            print(
+                f"fuzz: run_id={run_id} total_turns={total} mode={mode} sampling={sampling}",
+                file=sys.stderr,
+                flush=True,
+            )
         coros = [
-            _one_turn(p, t, lang, run_id, sc, ac, s, sem, mode=mode, ws_connect=ws_connect)
-            for p, t, lang in cells
+            _one_turn(
+                p,
+                t,
+                lang,
+                run_id,
+                sc,
+                ac,
+                s,
+                sem,
+                mode=mode,
+                ws_connect=ws_connect,
+                idx=i + 1,
+                total=total,
+                emit_progress=progress,
+            )
+            for i, (p, t, lang) in enumerate(cells)
         ]
         rows = await asyncio.gather(*coros)
     finally:

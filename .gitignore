@@ -33,6 +33,7 @@ htmlcov/
 data/sessions.sqlite3*
 logs/
 traces/
+handoff/
 
 # OS / IDE
 .DS_Store

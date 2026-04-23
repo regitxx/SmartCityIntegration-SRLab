@@ -115,19 +115,45 @@ def _system_prompt(topic: DatasetTopic, language: LanguageCode) -> str:
     )
 
 
+_RESULT_PREVIEW_CHARS = 1500
+
+
+def _format_result_for_judge(result: object | None) -> str:
+    """Serialise the raw tool result for the judge, truncated if huge.
+
+    The point of including the full result (not just `result_summary`) is
+    so the judge can actually verify numeric claims like "next train in 3
+    minutes" against what the tool returned. Over ~1.5 KB of JSON per
+    tool gets diminishing returns and blows the model's context, so we
+    truncate and note it.
+    """
+    if result is None:
+        return "(none)"
+    try:
+        blob = json.dumps(result, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return "(unserialisable)"
+    if len(blob) <= _RESULT_PREVIEW_CHARS:
+        return blob
+    return blob[:_RESULT_PREVIEW_CHARS] + f"…(+{len(blob) - _RESULT_PREVIEW_CHARS} chars)"
+
+
 def _user_prompt(question: str, reply: str, tool_trace: list[dict[str, Any]]) -> str:
     trace_lines = []
     for t in tool_trace:
         trace_lines.append(
             f"  - {t.get('name')}: status={t.get('status')} "
-            f"args={json.dumps(t.get('args'), ensure_ascii=False)} "
-            f"summary={t.get('result_summary') or ''}"
+            f"args={json.dumps(t.get('args'), ensure_ascii=False)}\n"
+            f"      summary: {t.get('result_summary') or '(none)'}\n"
+            f"      raw_result: {_format_result_for_judge(t.get('result'))}"
         )
     trace_str = "\n".join(trace_lines) if trace_lines else "  (no tools called)"
     return (
         "QUESTION:\n" + question + "\n\n"
         "AGENT REPLY:\n" + (reply or "(empty)") + "\n\n"
-        "TOOL TRACE:\n" + trace_str + "\n\n"
+        "TOOL TRACE (raw_result is the truth — summary is just a shorthand label):\n"
+        + trace_str
+        + "\n\n"
         "Return the JSON verdict now."
     )
 
