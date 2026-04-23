@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 import pytest
 import respx
 
 from smcity.tools import build_default_registry
+from smcity.tools import facility as facility_mod
+from smcity.tools.csdi import CSDI_DATASETS
 from smcity.tools.registry import ToolContext
 from smcity.tools.transport_citybus import CITYBUS_BASE
 from smcity.tools.transport_kmb import KMB_BASE
@@ -30,14 +34,158 @@ def test_registry_now_has_phase1b_tools() -> None:
         assert expected in names, f"missing tool {expected}"
 
 
+# --- facility test fixtures: mock CSDI FeatureServer responses -------------
+
+_COURTS_URL = CSDI_DATASETS["lcsd_basketball_courts"].url + "/query"
+_POOLS_URL = CSDI_DATASETS["lcsd_swimming_pools"].url + "/query"
+
+
+def _court_feature(
+    oid: int,
+    name_en: str,
+    name_tc: str,
+    address_en: str,
+    district: str,
+    courts: int,
+    lng: float,
+    lat: float,
+) -> dict[str, Any]:
+    return {
+        "attributes": {
+            "OBJECTID": oid,
+            "NAME_EN": name_en,
+            "NAME_TC": name_tc,
+            "ADDRESS_EN": address_en,
+            "ADDRESS_TC": "",
+            "SEARCH01_EN": district,
+            "No__of_Basketball_Courts_EN": courts,
+        },
+        "geometry": {"x": lng, "y": lat},
+    }
+
+
+def _pool_feature(
+    oid: int,
+    name_en: str,
+    name_tc: str,
+    district_en: str,
+    lng: float,
+    lat: float,
+    facility_type: str = "SWIMMING POOLS",
+) -> dict[str, Any]:
+    return {
+        "attributes": {
+            "OBJECTID": oid,
+            "NameEN": name_en,
+            "NameTC": name_tc,
+            "AddressEN": "",
+            "AddressTC": "",
+            "DistrictEN": district_en,
+            "FacilityTypeEN": facility_type,
+            "OpeningHoursEN": "",
+            "TelephoneEN": "",
+        },
+        "geometry": {"x": lng, "y": lat},
+    }
+
+
+@pytest.fixture
+def mock_csdi_facility() -> Any:
+    """Patch the CSDI HTTP endpoints + reset facility catalog caches."""
+    facility_mod._reset_catalogs_for_tests()
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(_COURTS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "features": [
+                        _court_feature(
+                            1,
+                            "Southorn Playground",
+                            "修頓遊樂場",
+                            "111 Hennessy Road, Wan Chai",
+                            "WAN CHAI",
+                            2,
+                            114.1728,
+                            22.2773,
+                        ),
+                        _court_feature(
+                            2,
+                            "Sha Tin Sports Ground",
+                            "沙田運動場",
+                            "Shan Mei Street, Sha Tin",
+                            "SHA TIN",
+                            3,
+                            114.19,
+                            22.3817,
+                        ),
+                        _court_feature(
+                            3,
+                            "Sheung Wan Sports Centre",
+                            "上環體育館",
+                            "Sheung Wan, HK",
+                            "CENTRAL AND WESTERN",
+                            1,
+                            114.1515,
+                            22.2863,
+                        ),
+                        # sport ground with 0 basketball courts — should be filtered out
+                        _court_feature(
+                            4,
+                            "Non-Basketball Venue",
+                            "非籃球場",
+                            "Somewhere",
+                            "NORTH",
+                            0,
+                            114.2,
+                            22.5,
+                        ),
+                    ],
+                    "exceededTransferLimit": False,
+                },
+            )
+        )
+        mock.get(_POOLS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "features": [
+                        _pool_feature(
+                            1,
+                            "Victoria Park Swimming Pool",
+                            "維多利亞公園游泳池",
+                            "Wan Chai",
+                            114.1868,
+                            22.2821,
+                        ),
+                        _pool_feature(
+                            2, "Tuen Mun Swimming Pool", "屯門游泳池", "Tuen Mun", 113.9631, 22.383
+                        ),
+                        _pool_feature(
+                            3,
+                            "Morrison Hill Swimming Pool",
+                            "摩利臣山游泳池",
+                            "Wan Chai",
+                            114.1744,
+                            22.2755,
+                        ),
+                    ],
+                    "exceededTransferLimit": False,
+                },
+            )
+        )
+        yield mock
+    facility_mod._reset_catalogs_for_tests()
+
+
 @pytest.mark.asyncio
-async def test_find_nearby_courts_by_coords() -> None:
+async def test_find_nearby_courts_by_coords(mock_csdi_facility: Any) -> None:
     registry = build_default_registry()
     ctx = ToolContext(session_id="t", locale="eng", query_lang="en")
     # Sheung Wan coordinates
     result = await registry.dispatch(
         "facility.find_nearby_courts",
-        {"lat": 22.2863, "lng": 114.1515, "radius_km": 2.0, "max_results": 3},
+        {"lat": 22.2863, "lng": 114.1515, "radius_km": 5.0, "max_results": 3},
         ctx,
     )
     assert result.status == "ok", result.error
@@ -46,11 +194,11 @@ async def test_find_nearby_courts_by_coords() -> None:
     assert 1 <= len(courts) <= 3
     for c in courts:
         assert c["distance_m"] is not None
-        assert c["distance_m"] <= 2000
+        assert c["distance_m"] <= 5000
 
 
 @pytest.mark.asyncio
-async def test_find_nearby_courts_by_district() -> None:
+async def test_find_nearby_courts_by_district(mock_csdi_facility: Any) -> None:
     registry = build_default_registry()
     ctx = ToolContext(session_id="t")
     result = await registry.dispatch("facility.find_nearby_courts", {"district": "Sha Tin"}, ctx)
@@ -58,11 +206,12 @@ async def test_find_nearby_courts_by_district() -> None:
     assert result.result is not None
     assert result.result["courts"], "expected at least one court in Sha Tin"
     for c in result.result["courts"]:
-        assert "Sha Tin" in c["district"]
+        # CSDI districts are uppercase; adapter title-cases them back.
+        assert "Sha Tin" in (c["district"] or "")
 
 
 @pytest.mark.asyncio
-async def test_find_nearby_courts_by_name_query() -> None:
+async def test_find_nearby_courts_by_name_query(mock_csdi_facility: Any) -> None:
     registry = build_default_registry()
     ctx = ToolContext(session_id="t")
     result = await registry.dispatch("facility.find_nearby_courts", {"name_query": "Southorn"}, ctx)
@@ -72,13 +221,37 @@ async def test_find_nearby_courts_by_name_query() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pools_filter_indoor_only() -> None:
+async def test_courts_filters_zero_basketball_venues(mock_csdi_facility: Any) -> None:
+    """Sport grounds with 0 basketball courts must be dropped from results."""
     registry = build_default_registry()
     ctx = ToolContext(session_id="t")
-    result = await registry.dispatch("facility.find_nearby_pools", {"indoor_only": True}, ctx)
+    result = await registry.dispatch("facility.find_nearby_courts", {"max_results": 20}, ctx)
     assert result.status == "ok"
     assert result.result is not None
-    assert all(p["indoor"] is True for p in result.result["pools"])
+    names = [c["name_en"] for c in result.result["courts"]]
+    assert "Non-Basketball Venue" not in names
+
+
+@pytest.mark.asyncio
+async def test_pools_by_district(mock_csdi_facility: Any) -> None:
+    registry = build_default_registry()
+    ctx = ToolContext(session_id="t")
+    result = await registry.dispatch("facility.find_nearby_pools", {"district": "Wan Chai"}, ctx)
+    assert result.status == "ok"
+    assert result.result is not None
+    assert result.result["pools"], "expected Wan Chai pools"
+    for p in result.result["pools"]:
+        assert "Wan Chai" in (p["district"] or "")
+
+
+@pytest.mark.asyncio
+async def test_pools_name_query(mock_csdi_facility: Any) -> None:
+    registry = build_default_registry()
+    ctx = ToolContext(session_id="t")
+    result = await registry.dispatch("facility.find_nearby_pools", {"name_query": "Victoria"}, ctx)
+    assert result.status == "ok"
+    assert result.result is not None
+    assert any("Victoria" in p["name_en"] for p in result.result["pools"])
 
 
 @pytest.mark.asyncio

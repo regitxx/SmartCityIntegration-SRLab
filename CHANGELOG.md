@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.3.4] — 2026-04-23
+
+**Bundled → live.** `facility.find_nearby_courts` and `facility.find_nearby_pools` now query the CSDI ArcGIS FeatureServer live instead of reading the bundled JSON snapshots.
+
+### Coverage
+
+| Tool | Before (bundled) | After (live CSDI) |
+|---|---|---|
+| `facility.find_nearby_courts` | 15 courts | **305 sports grounds with basketball courts** across 19 districts |
+| `facility.find_nearby_pools` | 10 pools | **46 public swimming pools** |
+
+Live smoke test verified: Sheung Wan lat/lng returns 5 real HK courts in 1.5 s (cold fetch); Wan Chai district filter returns Morrison Hill / Victoria Park / Wan Chai pools in 2.5 s. 24 h in-memory catalog cache means subsequent calls are instant.
+
+### Schema changes (breaking)
+
+The `BasketballCourt` / `NearbyCourt` schema loses `floodlit`, `outdoor`, `booking` (CSDI doesn't publish them) and gains `address_en`, `address_tc`. Court count now maps to `No__of_Basketball_Courts_EN`.
+
+The `SwimmingPool` / `NearbyPool` schema loses `indoor`, `heated`, `lanes` and gains `address_en`, `address_tc`, `facility_type`, `opening_hours`, `telephone`. The `indoor_only` arg is removed (only 1/46 pools mention "Indoor" in `FacilityDetailsEN` — the filter would be misleading).
+
+### Corrections versus v0.3.3 research
+
+- Basketball courts' district is in `SEARCH01_EN` (values like `SHA TIN`, `WAN CHAI`), NOT `DISTRICT`. The research agent invented `DISTRICT`; the adapter title-cases `SEARCH01_EN` to display-friendly `Sha Tin`.
+- CSDI's advertised `maxRecordCount=2000` is not honoured in practice — requesting `resultRecordCount=500` with multiple `outFields` returned `error=400`. Adapter uses `page_size=200` with our existing pagination loop.
+
+### Files removed
+
+- `data/lcsd_basketball_courts.json` — bundled snapshot no longer needed.
+- `data/lcsd_swimming_pools.json` — same.
+
+### Tests
+
+- `tests/test_tools_phase1b.py` — facility tests now mock the CSDI HTTP endpoints via respx + reset the module-level catalog cache. New `test_courts_filters_zero_basketball_venues` proves sports grounds with 0 basketball courts are dropped. Old `test_pools_filter_indoor_only` removed (filter gone).
+- **200 tests green** (was 198), ruff + format + mypy strict clean.
+
 ## [0.3.3] — 2026-04-23
 
 Wires two live CSDI ArcGIS FeatureServer datasets to the generic `csdi.query_features` tool shipped in v0.3.2.
