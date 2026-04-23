@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.5] — 2026-04-23
+
+**Docs + metadata drift fix.** No runtime changes; this commit reconciles stale strings and incorrect claims so the repo state on disk matches shipped reality.
+
+### Drift found by a health-check pass
+
+Version numbers had diverged across four places:
+- `pyproject.toml` `version` was still `0.1.0` — project metadata never got bumped past the initial scaffold.
+- `smcity_fuzz/__init__.py` `__version__` was `0.4.3` — one version behind main package.
+- `docs/DEPLOY.md` banner said `v0.3.1` — stuck at the audit-remediation release.
+
+Factual drift in `docs/DATASETS.md`:
+- Coverage summary was labelled v0.3.0 with 26 tools. Now v0.4.4 / 27 tools.
+- Claimed "**3 bundled-data tools** (LCSD × 2 + HKHA × 1) outside the workbook scope; live upgrade tracked for v0.4+". False — all three went live in v0.3.4 and v0.4.2.
+- No mention of `transport.plan_multimodal_journey` or the OTP2 scaffold.
+
+`docs/architecture/TOOL_CATALOG.md` was almost entirely stale — it listed ~20 aspirational v0.1 tools that don't exist (`transport.get_lrt_next_trains`, `get_mtr_service_status`, `get_nlb_eta`, `get_ferry_schedule`, `get_tram_info`, `plan_barrier_free_route`, `reachability_isochrone`, `detect_transfer_time`, `context.get_drive_traffic_speed`, `context.get_traffic_snapshot_url`, `facility.get_availability`, `housing.get_property_market_stats`, etc.) while missing every tool shipped since v0.3. **Rewritten from scratch** to reflect the actual 27-tool registry with accurate purposes, upstream sources, and TTLs. Cross-links `smcity_fuzz/` + `smcity/langrouter/coverage.py` + `otp/README.md`.
+
+`smcity/langrouter/coverage.py` had two `# Facility (bundled)` / `# Housing (bundled)` comments that were factually wrong after the CSDI / HKHA migrations; also missing entries for `transport.plan_multimodal_journey` (OTP2, v0.4.4) and `csdi.query_features` (v0.3.2) — both were falling through to the English-only default. Updated comments + added both entries as `{"en", "zh-Hant"}`.
+
+### Health check (this commit's baseline)
+
+- Ruff + format + mypy strict all clean across 76 source files.
+- **232 unit tests + 7 integration tests pass** (0 failures).
+- **Live smoke hits 13/13 upstreams** in 0.5–3 s each: HKHA, CSDI courts + pools, ALS, HKO (weather / warnings / AQHI / 9-day), MTR, KMB, OSM Overpass, CSDI generic.
+- No runtime bugs found. This commit is pure metadata alignment.
+
 ## [0.4.4] — 2026-04-23
 
 **OpenTripPlanner 2 sidecar scaffold** — true multimodal journey planning (walk + bus + MTR + minibus + ferry) via an OTP2 HTTP sidecar running in Docker. The hand-rolled Dijkstra MTR-only planner stays as the fast path / fallback.

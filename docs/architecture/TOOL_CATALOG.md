@@ -1,141 +1,119 @@
 # Tool Catalog — HK Smart City Agent
 
-**Version:** 2026-04-21 · v0.1
-**Ownership:** each tool has a single owner handler module.
+**Version:** v0.4.4 · 2026-04-23
+**Ownership:** each tool has a single owner handler module under `smcity/tools/`.
 **Naming:** `{domain}.{verb_object}` · `snake_case` · stable public name.
 
 Domains:
-- `transport.*` — public transit, driving, multimodal routing.
-- `context.*` — weather, AQI, warnings, traffic overlays.
-- `facility.*` — LCSD venues (courts, pools, parks, libraries, etc.).
-- `housing.*` — HKHA / RVD datasets.
-- `geo.*` — address lookup, coord transforms, POI search.
-- `meta.*` — `ask_user`, `what_languages_are_supported`, `get_session_state`.
+- `transport.*` — public transit + journey planning (MTR / KMB / Citybus / GMB / walk / taxi + OTP2 multimodal).
+- `context.*` — weather, AQHI, warnings, forecasts.
+- `facility.*` — LCSD basketball courts + swimming pools (live CSDI).
+- `housing.*` — HKHA public housing estates (live Housing Authority API).
+- `geo.*` — address lookup + OSM POI search.
+- `csdi.*` — generic ArcGIS FeatureServer querier.
+- `meta.*` — clarification, language coverage introspection, session forget.
 
-Every tool MUST declare:
+Every tool declares a `ToolSpec` (see `smcity/tools/registry.py`) with:
 ```python
-class ToolSpec(BaseModel):
-    name: str
-    description_en: str
-    args_schema: type[BaseModel]
-    result_schema: type[BaseModel]
-    upstream_langs: set[Literal["en","tc","sc"]]
-    ttl_seconds: int
-    budget_ms: int      # soft timeout
-    cacheable: bool
-    safety_class: Literal["read","read_personal","write"]   # v0: all "read"
+name                 str          # stable, snake_case.domain
+description_en       str          # goes into the OpenAI tool schema
+args_schema          pydantic     # validated at dispatch
+result_schema        pydantic     # normalised output
+handler              async def    # the worker
+ttl_seconds          int          # result cache TTL
+budget_ms            int          # soft timeout
+upstream_langs       frozenset    # native EN/繁體/简体 support
+upstream             str          # human-readable source (for citations)
+cacheable            bool         # opt out of TTL cache per-call
+safety_class         str          # "read" (v0 only writes are meta.forget_me)
 ```
 
 ---
 
-## Transport (`transport.*`)
+## Transport (`transport.*`) — 12 tools
 
-| Tool | Purpose | Upstream | TTL | Budget |
-|---|---|---|---|---|
-| `transport.get_mtr_next_trains` | Next 4 trains at a MTR heavy-rail station | MTR Next Train | 10 s | 800 ms |
-| `transport.get_lrt_next_trains` | Next trains at a Light Rail stop | MTR LRT | 10 s | 800 ms |
-| `transport.get_mtr_service_status` | Line disruptions / alerts | MTR service-status page (scrape + cache) | 60 s | 1000 ms |
-| `transport.get_kmb_eta_by_stop` | ETAs of all routes at a KMB stop | KMB | 30 s | 800 ms |
-| `transport.get_kmb_eta_by_route_stop` | ETA for a specific route at a KMB stop | KMB | 30 s | 800 ms |
-| `transport.get_citybus_eta_by_stop` | ETAs at a Citybus stop | Citybus | 30 s | 800 ms |
-| `transport.get_citybus_eta_by_route_stop` | Route-specific ETA | Citybus | 30 s | 800 ms |
-| `transport.get_nlb_eta` | Lantau bus ETA | NLB | 30 s | 800 ms |
-| `transport.get_gmb_eta` | Green minibus ETA | GMB | 30 s | 800 ms |
-| `transport.get_ferry_schedule` | Ferry schedule + any live ETA | TD Ferry dataset | 5 m | 1200 ms |
-| `transport.get_tram_info` | Best-effort tram schedule (no live feed) | scheduled headway | 60 m | 500 ms |
-| `transport.find_stops_near_point` | k-NN over all operator stops | local index | 1 h | 200 ms |
-| `transport.find_stops_by_name` | Fuzzy stop-name resolver (EN/繁體/简体/Jyutping) | local index | 1 h | 250 ms |
-| `transport.alias_stop` | Cluster cross-operator stops to one logical stop | local index | 1 h | 100 ms |
-| `transport.resolve_route_pattern` | route+direction+service_type → stop list | operator | 1 h | 800 ms |
-| `transport.get_route_fare` | Fare for OD pair | GTFS fares | 1 h | 500 ms |
-| `transport.plan_multimodal_route` | Full journey: walk + transit + walk | OTP2 + overlays | 30 s | 2000 ms |
-| `transport.plan_drive_route` | Driving ETA + alt routes | TDAS | 60 s | 1500 ms |
-| `transport.plan_walking_route` | Pedestrian path only | Valhalla/OTP | 30 m | 800 ms |
-| `transport.plan_barrier_free_route` | Wheelchair-friendly routing | OTP2 + curated accessibility | 30 s | 2500 ms |
-| `transport.reachability_isochrone` | "Where can I get in N minutes?" | R5 / OTP isochrones | 5 m | 2500 ms |
-| `transport.detect_transfer_time` | Platform-to-platform interchange time at a station | curated dataset | 24 h | 150 ms |
-| `transport.last_trip_of_day` | Late-night planner | GTFS + real-time fallback | 60 s | 1500 ms |
+| Tool | Purpose | Upstream | TTL |
+|---|---|---|---|
+| `transport.get_mtr_next_trains` | Next trains at an MTR station (fuzzy station resolver over 105 stations, trilingual) | rt.data.gov.hk/v1/transport/mtr | 30 s |
+| `transport.get_kmb_eta_by_stop` | ETAs of all routes at a KMB stop (by name or stop_id; lazy-loaded 6715-stop catalog) | data.etabus.gov.hk | 30 s |
+| `transport.get_kmb_eta_by_route_stop` | ETA of a specific route at a KMB stop | data.etabus.gov.hk | 30 s |
+| `transport.get_citybus_eta_by_route_stop` | Live Citybus ETA for a (route, stop) pair | rt.data.gov.hk/v2/transport/citybus | 30 s |
+| `transport.get_citybus_route_stops` | Stops along a Citybus route + direction | rt.data.gov.hk/v2/transport/citybus | 1 h |
+| `transport.get_gmb_eta` | Green minibus live ETA (two-hop: route lookup → eta) | data.etagmb.gov.hk | 30 s |
+| `transport.find_stops_near_point` | k-NN over KMB + MTR stop coords | local catalogs | 1 h |
+| `transport.find_stops_by_name` | Fuzzy name search across KMB + MTR | local catalogs | 1 h |
+| `transport.plan_simple_route` | Dijkstra walk → MTR → walk (fast path, MTR-only) | `data/mtr_lines.json` topology | 1 h |
+| `transport.plan_walking_route` | Walking-only plan with haversine + pace | local geometry | 1 h |
+| `transport.plan_taxi_estimate` | Taxi distance + fare (HK 2026 tariff: $27 flag + $1.90/200 m) | local | 1 h |
+| `transport.plan_journey` | Unified "best of walk / MTR / taxi" for free-form queries | local | 1 h |
+| `transport.plan_multimodal_journey` | **True multimodal** walk + bus + rail + ferry via OTP2 sidecar | OTP2 HTTP (`otp/README.md`) | 60 s |
 
-## Context (`context.*`)
+**Why two planners?** `plan_simple_route` is the fast path — no external deps, <100 ms, MTR-dominated queries answered without a sidecar. `plan_multimodal_journey` handles bus/ferry/minibus/etc. when OTP2 is running; raises a clean upstream error with a fallback hint when it's not.
 
-| Tool | Purpose | Upstream | TTL | Budget |
-|---|---|---|---|---|
-| `context.get_current_weather` | Temp / humidity / rain / wind now | HKO `rhrread` | 5 m | 800 ms |
-| `context.get_9day_forecast` | Multi-day outlook | HKO `fnd` | 1 h | 800 ms |
-| `context.get_active_warnings` | Typhoon / rainstorm / thunderstorm / landslip / hot / cold / fire | HKO `warnsum` + `warningInfo` | 60 s | 800 ms |
-| `context.get_aqhi` | AQHI at nearest station + forecast band | EPD AQHI | 5 m | 800 ms |
-| `context.get_drive_traffic_speed` | Road-segment speed bands | TD JTIS | 2 m | 800 ms |
-| `context.get_traffic_snapshot_url` | CCTV JPEG for a road | TD CCTV | 60 s | 200 ms |
-| `context.get_live_service_summary` | One-call "anything weird right now?" | fuses MTR + bus alerts + HKO + EPD | 60 s | 1500 ms |
+## Context (`context.*`) — 4 tools
 
-## Facility (`facility.*`)
+| Tool | Purpose | Upstream | TTL |
+|---|---|---|---|
+| `context.get_current_weather` | Temp / humidity / past-hour rainfall / UV at HKO | HKO `rhrread` | 5 m |
+| `context.get_active_warnings` | Typhoon / rainstorm / thunderstorm / landslip / heat / cold signals in effect | HKO `warnsum` | 60 s |
+| `context.get_9day_forecast` | Multi-day outlook: max/min temp, humidity range, wind, rain prob | HKO `fnd` | 1 h |
+| `context.get_aqhi` | Per-station Air Quality Health Index + risk band | EPD aqhi_ind_rss (XML) | 5 m |
 
-| Tool | Purpose | Upstream | TTL | Budget |
-|---|---|---|---|---|
-| `facility.find_nearby` | k-NN over LCSD static catalog (court / pool / pitch / park / library / community hall / museum) | LCSD CSDI | 24 h | 500 ms |
-| `facility.get_details` | Full metadata for a facility ID | LCSD CSDI | 24 h | 400 ms |
-| `facility.get_availability` | Real-time booking slots | LCSD SmartPLAY | 60 s | 800 ms |
-| `facility.get_opening_hours` | Opening hours + holiday schedule | LCSD venue directory | 24 h | 400 ms |
+## Facility (`facility.*`) — 2 tools (live)
 
-## Housing (`housing.*`)
+| Tool | Purpose | Upstream | TTL |
+|---|---|---|---|
+| `facility.find_nearby_courts` | LCSD basketball courts by lat/lng + radius, district, or fuzzy name (305 venues, 19 districts) | CSDI FeatureServer `lcsd_rcd_1629267205215_38105` | 24 h |
+| `facility.find_nearby_pools` | LCSD swimming pools — same filters (46 pools) | CSDI FeatureServer `lcsd_rcd_1634540558875_77434` | 24 h |
 
-| Tool | Purpose | Upstream | TTL | Budget |
-|---|---|---|---|---|
-| `housing.get_estate_info` | Public housing estate profile | HKHA PRH Estates | 24 h | 800 ms |
-| `housing.list_estates_in_district` | Estates in a district | HKHA | 24 h | 800 ms |
-| `housing.get_property_market_stats` | Rent / price medians by district | RVD | 24 h | 800 ms |
-| `housing.get_waitlist_aggregate_stats` | Quarterly average wait time by family type (aggregate only) | HKHA public stats | 24 h | 800 ms |
+Backed by a 24 h module-level catalog cache; first call per process fetches, subsequent calls hit RAM.
 
-> **Deliberate gap:** no `housing.check_my_application_status` tool. The agent must redirect to the official eligibility checker + application portal when asked. See `02_*.md` §1.3.
+## Housing (`housing.*`) — 2 tools (live)
 
-## Geo (`geo.*`)
+| Tool | Purpose | Upstream | TTL |
+|---|---|---|---|
+| `housing.get_estate_info` | Fuzzy EN/繁體 search over all 241 HKHA estates; TC names via `data/hkha_name_map_tc.json` overlay | data.housingauthority.gov.hk | 24 h |
+| `housing.list_estates_in_district` | All estates in a district (with optional region filter) | data.housingauthority.gov.hk | 24 h |
 
-| Tool | Purpose | Upstream | TTL | Budget |
-|---|---|---|---|---|
-| `geo.address_lookup` | Free-text address → GeoJSON feature list | ALS | 24 h | 1000 ms |
-| `geo.reverse_geocode` | lat/lng → nearest address | CSDI + ALS | 24 h | 800 ms |
-| `geo.transform_coords` | HK1980 ↔ WGS84 | Lands Dept Transform | 30 d | 150 ms |
-| `geo.location_search` | Place / building / POI search | CSDI Location Search | 24 h | 1000 ms |
-| `geo.jyutping_to_text` | Romanized Cantonese → Traditional | pycantonese (local) | 30 d | 100 ms |
+> **Deliberate gap:** no `housing.check_my_application_status` tool — personal eligibility is redirected to the official checker per the system prompt's safety rule.
 
-## Meta (`meta.*`)
+## Geo (`geo.*`) — 2 tools
+
+| Tool | Purpose | Upstream | TTL |
+|---|---|---|---|
+| `geo.address_lookup` | Free-text address → GeoJSON feature + lat/lng (EN + 繁體) | www.als.gov.hk | 24 h |
+| `geo.search_osm_pois` | Unified Overpass search across **30 workbook categories** (S514-S549): toilets, convenience, worship, MTR entrances, water fountains, benches, shelters, dentists, etc. | overpass-api.de | 1 h |
+
+## CSDI (`csdi.*`) — 1 tool
+
+| Tool | Purpose | Upstream | TTL |
+|---|---|---|---|
+| `csdi.query_features` | Generic read of any registered CSDI ArcGIS FeatureServer dataset (`lcsd_basketball_courts` / `lcsd_swimming_pools`); SSRF-safe by whitelist | portal.csdi.gov.hk | 24 h |
+
+## Meta (`meta.*`) — 3 tools
 
 | Tool | Purpose |
 |---|---|
-| `meta.ask_user` | Emit a clarifying question; writes slot expectation. The only "tool" that doesn't touch upstream data — it's the disambiguation gate. |
-| `meta.what_languages_are_supported` | For a given tool name or upstream dataset, report the language-coverage matrix. Used when the user asks "can you answer in Korean?". |
-| `meta.get_session_state` | Introspect current slot state (dev / debug). |
-| `meta.forget_me` | Wipe the session record + Langfuse trace. |
+| `meta.ask_user` | Emit a clarification prompt with a slot hint — the only tool that returns a question rather than data. |
+| `meta.what_languages_are_supported` | Introspect the per-tool `upstream_langs` matrix. |
+| `meta.forget_me` | Wipe the caller's session row (GDPR-style "right to be forgotten"). |
 
 ---
 
 ## Invariants
 
-1. All tool names are stable across versions — renames require deprecation plus alias for at least 60 days.
-2. All tool args are pydantic-validated at the dispatcher. The LLM never sees raw untyped JSON reach a handler.
-3. All tool responses include `source` and `fetched_at` so the response formatter can attach citations.
-4. No tool ever returns free-form HTML from an upstream — always extract structured fields.
-5. A tool either returns cleanly or raises one of `ToolTimeout`, `ToolRateLimited`, `ToolUpstreamError`, `ToolValidationError`. The dispatcher maps these to user-facing degraded responses.
+1. **Stable names.** Renames require a deprecation alias for ≥60 days.
+2. **Typed args at the boundary.** `ToolRegistry.dispatch` validates `raw_args` against `args_schema` before any handler runs. The LLM never reaches a handler with untyped JSON.
+3. **Cited sources.** Every successful tool call produces a `Citation(tool, upstream, fetched_at, upstream_langs, translation_applied)` that the orchestrator attaches to the final reply's `src: …` footer.
+4. **No raw HTML leaking to the user.** Handlers parse upstream formats (JSON / XML / OSM Overpass QL) into structured fields. No `<br/>`, no CDATA escapes reach the user.
+5. **Typed failures.** Handlers raise exactly one of `ToolTimeoutError`, `ToolRateLimitedError`, `ToolUpstreamError`, `ToolValidationError` — the dispatcher catches these and converts to a `ToolResult(status=…)` with `status != "ok"`.
 
 ---
 
-## v0 scope cut (Phase 1 MVP — see `docs/PLAN.md`)
+## Adversarial testing
 
-Only these tools ship in v0:
+`smcity_fuzz/` (v0.4.0+) drives this registry with LLM-generated questions across 5 personas × 22 topics × 4 languages, grades the replies with an LLM-as-judge, and exports Markdown handoff reports. The judge is explicitly prompted to describe defects only — never to propose code fixes. See `smcity_fuzz/judge.py` + `smcity_fuzz/export.py`.
 
-- `transport.get_mtr_next_trains`
-- `transport.get_kmb_eta_by_stop`
-- `transport.get_citybus_eta_by_stop`
-- `transport.find_stops_near_point`
-- `transport.find_stops_by_name`
-- `transport.plan_multimodal_route` (MTR + bus + walk only)
-- `context.get_current_weather`
-- `context.get_active_warnings`
-- `context.get_aqhi`
-- `facility.find_nearby` (basketball courts only at first, then broaden)
-- `geo.address_lookup`
-- `meta.ask_user`
-- `meta.what_languages_are_supported`
+## Upstream coverage ledger
 
-That's 13 tools — enough to answer the three hero scenarios in the user's brief:
-Sheung Wan → Sha Tin · "basketball court, how to get there?" · "is it OK to go outside right now?".
+See `smcity/langrouter/coverage.py` (`DATASET_COVERAGE`) for the native-language matrix per tool. When a user query arrives in a language an upstream doesn't natively serve, `choose_query_lang()` picks the closest supported tongue and sets `translation_applied=True` on the resulting citation.

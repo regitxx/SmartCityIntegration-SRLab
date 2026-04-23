@@ -27,6 +27,7 @@ DATASET_COVERAGE: dict[str, set[SupportedLang]] = {
     "transport.plan_taxi_estimate": {"en", "zh-Hant"},
     "transport.plan_journey": {"en", "zh-Hant"},
     "transport.get_gmb_eta": {"en", "zh-Hant", "zh-Hans"},
+    "transport.plan_multimodal_journey": {"en", "zh-Hant"},  # OTP2 + HK GTFS feeds
     # Context
     "context.get_9day_forecast": {"en", "zh-Hant", "zh-Hans"},
     # Geo — OpenStreetMap (multilingual tags; EN/繁體 usually populated).
@@ -37,12 +38,14 @@ DATASET_COVERAGE: dict[str, set[SupportedLang]] = {
     "context.get_aqhi": {"en", "zh-Hant"},
     # Geo
     "geo.address_lookup": {"en", "zh-Hant"},
-    # Facility (bundled)
+    # Facility (live CSDI — both EN and 繁體 native on the FeatureServer).
     "facility.find_nearby_courts": {"en", "zh-Hant"},
     "facility.find_nearby_pools": {"en", "zh-Hant"},
-    # Housing (bundled)
+    # Housing (live HKHA JSON — EN-native; 繁體 via hkha_name_map_tc.json overlay).
     "housing.get_estate_info": {"en", "zh-Hant"},
     "housing.list_estates_in_district": {"en", "zh-Hant"},
+    # CSDI generic ArcGIS FeatureServer querier (bilingual attributes per dataset).
+    "csdi.query_features": {"en", "zh-Hant"},
 }
 
 # Maps our internal primary_lang codes → the user's query language tag to use

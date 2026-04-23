@@ -111,12 +111,15 @@ per dataset.
 
 ---
 
-## Coverage summary (v0.3.0)
+## Coverage summary (v0.4.4)
 
-- **30 of 35 workbook datasets** served live: all 27 POI categories + all 3 road facility categories.
-- **4 data.gov.hk transport datasets (S500, S505-S507)** deferred to v0.4+.
-- **1 CSDI topographic map (S512)** deferred to v0.4+.
-- **5 extra live data.gov.hk endpoints** (MTR / KMB / Citybus / GMB / HKO / EPD / ALS) from outside the workbook, covering the original lab brief.
-- **3 bundled-data tools** (LCSD × 2 + HKHA × 1) outside the workbook scope; live upgrade tracked for v0.4+.
+- **30 of 35 workbook datasets** served live: all 27 POI categories + all 3 road facility categories via `geo.search_osm_pois`.
+- **4 data.gov.hk transport datasets (S500, S505-S507)** — partly covered by the `transport.plan_multimodal_journey` OTP2 scaffold (v0.4.4), which consumes HK GTFS feeds at build time. Requires user-side Docker + graph build (see `otp/README.md`); the tool itself is wired and tested.
+- **1 CSDI topographic map (S512)** deferred — not yet needed (OSM + ALS cover place lookup).
+- **5+ extra live data.gov.hk endpoints** (MTR / KMB / Citybus / GMB / HKO / EPD / ALS) from outside the workbook.
+- **Formerly-bundled tools all went live:**
+  - LCSD basketball courts: live via CSDI (305 venues, v0.3.4)
+  - LCSD swimming pools: live via CSDI (46 pools, v0.3.4)
+  - HKHA estates: live via Housing Authority JSON API (241 estates, v0.4.2)
 
-Total tools in the registry: **26** (v0.2.0 was 22; v0.3.0 added `geo.search_osm_pois`, `transport.get_gmb_eta`, `context.get_9day_forecast`; v0.3.2 added `csdi.query_features`).
+Total tools in the registry: **27** (v0.2.0 was 22; v0.3.0 added `geo.search_osm_pois`, `transport.get_gmb_eta`, `context.get_9day_forecast`; v0.3.2 added `csdi.query_features`; v0.4.4 added `transport.plan_multimodal_journey`).

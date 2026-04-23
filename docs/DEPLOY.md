@@ -1,6 +1,6 @@
 # Deployment — Tailscale Serve
 
-**Version:** v0.3.1 · 2026-04-23
+**Version:** v0.4.4 · 2026-04-23
 **Default posture:** Tailscale-only, no public Funnel, no PII persistence.
 
 ---
