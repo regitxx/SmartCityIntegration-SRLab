@@ -18,7 +18,7 @@ jobs:
       - run: uv sync --extra dev
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run mypy smcity tests
+      - run: uv run mypy smcity smcity_fuzz tests
       - run: uv run pytest -q -m "not integration"
 
   audit:

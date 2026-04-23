@@ -2,6 +2,75 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.0] — 2026-04-23
+
+**Adversarial fuzz harness.** New `smcity_fuzz/` package drives the production agent with LLM-generated questions and grades every reply with an LLM-as-judge — actual semantic testing instead of regex shape-checks.
+
+### Architecture
+
+```
+synth (gpt-oss-20b) → question
+                        │ persona × topic × language
+                        ▼
+                    POST /turn (gpt-oss-120b agent)
+                        │
+                        ▼
+                     (reply, tool_trace)
+                        │
+                        ▼
+            judge (gpt-oss-20b) → rubric JSON
+                        │
+                        ▼
+               logs/fuzz_runs.jsonl
+```
+
+Single LM Studio endpoint serves both models (120b for agent, 20b for fuzzer); load both in LM Studio and the client routes by `model` field per request — no second instance needed.
+
+### Modules (new)
+
+- `smcity_fuzz/personas.py` — 5 hand-authored personas: Cantonese senior, English tourist, bilingual HK student, mainland visitor, rushed commuter. Each carries a character sheet + style hints.
+- `smcity_fuzz/datasets.py` — 22 topics mapped to expected tools (MTR, KMB, Citybus, GMB, weather, AQHI, pools, courts, housing, public toilets, benches, dentists, etc.).
+- `smcity_fuzz/synth.py` — `synthesise_question(persona, topic, language)` calls gpt-oss-20b with a role-play prompt, strips "Question:" prefixes + outer quotes, returns one question.
+- `smcity_fuzz/judge.py` — rubric scorer (intent_match / language_ok / tool_choice_ok / factual_vs_trace / coherence, each 0–2) + `failure_reasons` tags + one-sentence `summary`. Strips markdown fences from model output, validates against pydantic.
+- `smcity_fuzz/runner.py` — `run_campaign()` — asyncio bounded concurrency over persona × topic × language; per-turn errors land in the row's `errors[]` so the campaign never aborts.
+- `smcity_fuzz/store.py` — `logs/fuzz_runs.jsonl` append-only, fsync'd per row. Skips corrupt lines on read.
+- `smcity_fuzz/report.py` — failure summary grouped by dataset / language / persona / failure reason, with top-N detail rows.
+- `smcity_fuzz/cli.py` — `uv run python -m smcity_fuzz run|report|failures` with `--turns / --concurrency / --personas / --topics / --languages` filters.
+
+### Config (env-driven, prefix `FUZZER_`)
+
+- `FUZZER_BASE_URL` — LM Studio URL (default: same as production agent)
+- `FUZZER_MODEL` — default `openai/gpt-oss-20b`
+- `FUZZER_AGENT_URL` — default `http://127.0.0.1:8080`
+- `FUZZER_RUNS_PATH` — default `logs/fuzz_runs.jsonl`
+- `FUZZER_CONCURRENCY` — default 2
+
+### Tests (14 new)
+
+Synth (4), judge (4), store (2), runner end-to-end happy path + agent error + synth error (3), report (1). Every upstream (LM Studio + smcity `/turn`) is respx-mocked so CI stays hermetic.
+
+### CI + packaging
+
+- `check.yml` now runs `mypy smcity smcity_fuzz tests` (previously `smcity tests` only).
+- `pyproject.toml` includes `smcity_fuzz` in hatch wheel targets.
+
+### What this catches that templates + regex can't
+
+- Semantic factual drift between tool output and reply
+- Wrong-tool-for-the-intent (agent called `get_mtr_next_trains` when user asked about buses)
+- Partial language drift (reply half in English, half in Cantonese)
+- Coherence failures (tool returned 0 results but reply invents venues)
+- Refuse-wrongly failures (agent refused a legitimate query)
+
+### What's deferred to v0.4.1+
+
+- WebSocket runner (streaming timing, not just total latency)
+- HTML dashboard for failures
+- Cross-run regression detection (comparing two run_ids)
+- Auto-retry for transient agent errors
+
+**214 tests green** (was 200), ruff + format + mypy strict clean across 71 source files.
+
 ## [0.3.4] — 2026-04-23
 
 **Bundled → live.** `facility.find_nearby_courts` and `facility.find_nearby_pools` now query the CSDI ArcGIS FeatureServer live instead of reading the bundled JSON snapshots.

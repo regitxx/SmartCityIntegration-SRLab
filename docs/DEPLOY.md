@@ -42,6 +42,29 @@ These are set in the LM Studio UI (Chat or Server tab → model gear ⚙️). No
 - **Speculative decoding.** Pair `gpt-oss-120b` with `gpt-oss-20b` as the draft model. Expected saving: ~300–800 ms per synthesis hop on the Mac Studio. Covered in `docs/audit/03_enhancements.md` §1.
 - **Flash attention.** Enable on Metal; LM Studio 0.3+ supports it for `gpt-oss-*`. Drops first-token latency by 10–20 % on our workload.
 - **Keep model loaded.** Set "Keep model loaded after request" so the KV cache isn't evicted between idle turns. The agent passes `user=session_id` on every call, which llama.cpp / LM Studio routes to a per-slot KV cache.
+- **Load `gpt-oss-20b` alongside `gpt-oss-120b`** if you want to run `smcity_fuzz` — the fuzzer uses the 20b for synth + judge via the same endpoint, selected per-request via the `model` field. RAM overhead ~15 GB on top of the 80 GB used by the 120b.
+
+### Running the adversarial fuzz harness (`smcity_fuzz`)
+
+```bash
+# from the agent host (or any machine with tailnet access):
+uv run python -m smcity_fuzz run --turns 20 --concurrency 2
+
+# filter to a specific persona / topic / language:
+uv run python -m smcity_fuzz run --personas cantonese_senior --topics mtr_next_trains --languages yue
+
+# review failures from a specific run:
+uv run python -m smcity_fuzz failures --run-id run-abcdef123456 --top 20
+```
+
+Env knobs (defaults mirror the production agent tailnet):
+- `FUZZER_BASE_URL` — LM Studio URL (fuzzer)
+- `FUZZER_MODEL` — default `openai/gpt-oss-20b`
+- `FUZZER_AGENT_URL` — default `http://127.0.0.1:8080`
+- `FUZZER_CONCURRENCY` — default 2 (keep low so production slots aren't starved)
+- `FUZZER_RUNS_PATH` — default `logs/fuzz_runs.jsonl`
+
+The fuzzer and the agent share the same LM Studio endpoint via different `model` fields — don't provision a second instance unless you genuinely want concurrent 120b workloads.
 
 ## Install + run
 
