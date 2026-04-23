@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.3.3] — 2026-04-23
+
+Wires two live CSDI ArcGIS FeatureServer datasets to the generic `csdi.query_features` tool shipped in v0.3.2.
+
+### New live data sources
+
+- **`lcsd_basketball_courts`** → `portal.csdi.gov.hk/.../lcsd_rcd_1629267205215_38105/FeatureServer/0`. Bilingual name, address, district, court count. UPPER_SNAKE field naming.
+- **`lcsd_swimming_pools`** → `portal.csdi.gov.hk/.../lcsd_rcd_1634540558875_77434/FeatureServer/0`. Bilingual name, address, district, facility details, opening hours, telephone. **CamelCase** field naming (different from basketball courts — the `CSDIDataset` struct captures per-dataset naming so call sites never guess).
+
+Both return WGS84 via `outSR=4326`; the generic client follows `exceededTransferLimit` pagination transparently.
+
+### Docs
+
+- **`docs/research/06_csdi_endpoints.md`** — verified endpoint reference (URL, field list, sample row, verification curl output). Confirms all five tested endpoints worked on 2026-04-23.
+- Flags that HKHA estates aren't on CSDI — canonical live source is the Housing Authority's own JSON API (`data.housingauthority.gov.hk/psi/rest/export/prh-estates`), which needs its own non-ArcGIS tool. Tracked as v0.3.4+.
+
+### Tests
+
+- `test_production_datasets_registered_on_import` pins both datasets' presence + their (differing) field-naming conventions.
+- `_reset_csdi_registry` fixture now snapshots and restores `CSDI_DATASETS` so test isolation doesn't nuke the production registry.
+- **198 tests green** (was 197), ruff + format + mypy strict clean.
+
+## [0.3.2] — 2026-04-23
+
+CSDI ArcGIS FeatureServer scaffold. Generic async client (`query_feature_server`) + agent-facing tool (`csdi.query_features`) with an SSRF-safe dataset registry. Tool ships with `CSDI_DATASETS` empty; entries land per-dataset in v0.3.3+.
+
+- **`smcity/tools/csdi.py`** — client handles pagination via `exceededTransferLimit`, requests `outSR=4326` by default, exposes bbox envelope queries.
+- **Tool spec** — `csdi.query_features(dataset, where, bbox, limit)` with a 24h TTL.
+- **Tests** — 8 unit tests covering single-page, pagination, limit capping, ArcGIS error envelope, HTTP 500, bbox encoding, unknown-dataset rejection, tool round-trip.
+
 ## [0.3.1] — 2026-04-23
 
 Executes the **"this week"** + **"this milestone"** clusters from `docs/AUDIT.md`. Zero behavioural changes on the happy path; every change is hardening, latency-preserving, or test coverage.

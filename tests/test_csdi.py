@@ -28,9 +28,13 @@ def _feat(oid: int, *, name_en: str, name_tc: str, x: float, y: float) -> dict[s
 
 
 @pytest.fixture(autouse=True)
-def _reset_csdi_registry() -> None:
-    """Each test starts with a clean dataset registry."""
+def _reset_csdi_registry() -> Any:
+    """Each test starts with a clean registry; production datasets are restored after."""
+    saved = dict(CSDI_DATASETS)
     CSDI_DATASETS.clear()
+    yield
+    CSDI_DATASETS.clear()
+    CSDI_DATASETS.update(saved)
 
 
 @pytest.mark.asyncio
@@ -161,6 +165,29 @@ async def test_csdi_tool_rejects_unknown_dataset() -> None:
             CSDIQueryArgs(dataset="not_a_dataset"),
             ToolContext(session_id="s"),
         )
+
+
+def test_production_datasets_registered_on_import(
+    _reset_csdi_registry: Any,
+) -> None:
+    """Importing the module should leave the two verified LCSD datasets ready."""
+    # The autouse fixture has cleared the registry. Re-populate from the
+    # module-level definitions by re-running the module initialiser.
+    import importlib
+
+    import smcity.tools.csdi as mod
+
+    importlib.reload(mod)
+    assert "lcsd_basketball_courts" in mod.CSDI_DATASETS
+    assert "lcsd_swimming_pools" in mod.CSDI_DATASETS
+    bb = mod.CSDI_DATASETS["lcsd_basketball_courts"]
+    sp = mod.CSDI_DATASETS["lcsd_swimming_pools"]
+    assert bb.url.startswith("https://portal.csdi.gov.hk/")
+    assert sp.url.startswith("https://portal.csdi.gov.hk/")
+    # Field-naming conventions differ between these two datasets; the
+    # struct captures both so downstream code never guesses.
+    assert bb.name_field_en == "NAME_EN"
+    assert sp.name_field_en == "NameEN"
 
 
 @pytest.mark.asyncio

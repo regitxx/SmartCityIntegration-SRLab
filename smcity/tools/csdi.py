@@ -64,10 +64,40 @@ class CSDIDataset:
     description: str = ""
 
 
-# Datasets are registered as each one is verified by the research agent.
-# Empty registry is valid — the tool surfaces a helpful error until at
-# least one entry lands.
-CSDI_DATASETS: dict[CSDIDatasetId, CSDIDataset] = {}
+# Verified dataset registry — see docs/research/06_csdi_endpoints.md for the
+# live-query evidence behind each entry. Field names differ between datasets
+# (basketball courts use UPPER_SNAKE; swimming pools use CamelCase) — we
+# store them per-dataset so call sites never have to guess.
+_CSDI_BASE = "https://portal.csdi.gov.hk/server/rest/services/common"
+
+CSDI_DATASETS: dict[CSDIDatasetId, CSDIDataset] = {
+    "lcsd_basketball_courts": CSDIDataset(
+        id="lcsd_basketball_courts",
+        title_en="LCSD Basketball Courts",
+        url=f"{_CSDI_BASE}/lcsd_rcd_1629267205215_38105/FeatureServer/0",
+        name_field_en="NAME_EN",
+        name_field_tc="NAME_TC",
+        max_record_count=2000,
+        description=(
+            "Free public basketball courts run by LCSD. Useful for "
+            "'where is the nearest court' queries; returns bilingual name, "
+            "address, district, and court count (No__of_Basketball_Courts_EN)."
+        ),
+    ),
+    "lcsd_swimming_pools": CSDIDataset(
+        id="lcsd_swimming_pools",
+        title_en="LCSD Swimming Pools",
+        url=f"{_CSDI_BASE}/lcsd_rcd_1634540558875_77434/FeatureServer/0",
+        name_field_en="NameEN",
+        name_field_tc="NameTC",
+        max_record_count=3000,
+        description=(
+            "LCSD public swimming pools with facility details, opening "
+            "hours, and contact info. Field naming is CamelCase (NameEN, "
+            "AddressEN, DistrictEN, OpeningHoursEN, etc.) — NOT UPPER_SNAKE."
+        ),
+    ),
+}
 
 
 def register_dataset(ds: CSDIDataset) -> None:
