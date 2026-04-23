@@ -14,7 +14,8 @@ import respx
 
 from smcity_fuzz.datasets import TOPICS
 from smcity_fuzz.datasets import by_id as topic_by_id
-from smcity_fuzz.judge import JudgeError, JudgeVerdict, judge
+from smcity_fuzz.export import render_report
+from smcity_fuzz.judge import JudgeError, JudgeVerdict, _system_prompt, judge
 from smcity_fuzz.personas import PERSONAS
 from smcity_fuzz.personas import by_id as persona_by_id
 from smcity_fuzz.report import summarise
@@ -307,6 +308,105 @@ async def test_runner_records_synth_error(tmp_settings: FuzzSettings) -> None:
 
 
 # --- report -------------------------------------------------------------
+
+
+def test_judge_prompt_forbids_code_fixes() -> None:
+    """The system prompt must explicitly keep the judge in diagnostic mode.
+
+    This pins the guardrail so a well-meaning refactor can't accidentally
+    let the judge start suggesting code patches.
+    """
+    prompt = _system_prompt(TOPICS[0], "en")
+    lower = prompt.lower()
+    assert "must not suggest" in lower or "not propose" in lower or "diagnostic only" in lower
+    assert "code fix" in lower or "code" in lower
+    # The prompt must still explain that a separate system (Claude/Gemini)
+    # receives the diagnostic output for fixing.
+    assert "claude" in lower or "gemini" in lower or "engineer" in lower
+
+
+# --- export -------------------------------------------------------------
+
+
+def _fail_row(topic: str = "swimming_pools") -> FuzzRow:
+    return FuzzRow(
+        run_id="run-export-test",
+        ts="2026-04-23T12:00:00+00:00",
+        persona="cantonese_senior",
+        language="yue",
+        topic=topic,
+        question="搵個最近嘅泳池",
+        reply="Victoria Park Swimming Pool",
+        tool_trace=[
+            {
+                "index": 1,
+                "name": "facility.find_nearby_pools",
+                "args": {"district": "Wan Chai"},
+                "status": "ok",
+                "latency_ms": 2400,
+                "result_summary": "3 pools",
+            }
+        ],
+        elapsed_ms=3100,
+        judge=JudgeVerdict(
+            intent_match=2,
+            language_ok=0,
+            tool_choice_ok=2,
+            factual_vs_trace=2,
+            coherence=1,
+            failure_reasons=["english_in_cantonese", "wrong_language"],
+            summary="Replied in English despite Cantonese question.",
+        ),
+    )
+
+
+def test_export_banner_forbids_code_suggestions() -> None:
+    markdown = render_report([_fail_row()])
+    lower = markdown.lower()
+    assert "diagnostic" in lower
+    assert "claude" in lower or "gemini" in lower
+    assert "not propose" in lower or "not suggest" in lower or "does not propose" in lower
+
+
+def test_export_includes_failure_section_and_raw_json() -> None:
+    row = _fail_row()
+    markdown = render_report([row])
+    assert "## Failure 1" in markdown
+    assert "cantonese_senior" in markdown
+    assert "搵個最近嘅泳池" in markdown
+    assert "Victoria Park Swimming Pool" in markdown
+    assert "english_in_cantonese" in markdown
+    assert "Replied in English despite Cantonese question." in markdown
+    # Raw-row block for copy-paste into a fix session.
+    assert "### Raw row (JSON)" in markdown
+    assert '"run_id": "run-export-test"' in markdown
+
+
+def test_export_only_failures_flag_excludes_passes() -> None:
+    pass_row = FuzzRow(
+        run_id="r",
+        ts="t",
+        persona="p",
+        language="en",
+        topic="mtr_next_trains",
+        question="q",
+        reply="ok",
+        judge=JudgeVerdict(
+            intent_match=2, language_ok=2, tool_choice_ok=2, factual_vs_trace=2, coherence=2
+        ),
+    )
+    rows = [pass_row, _fail_row()]
+    only = render_report(rows, only_failures=True)
+    assert "Failure 1" in only
+    assert only.count("## Failure") == 1
+    all_rows = render_report(rows, only_failures=False)
+    assert all_rows.count("## Failure") == 2
+
+
+def test_export_max_failures_caps_sections() -> None:
+    rows = [_fail_row(topic=f"topic_{i}") for i in range(5)]
+    out = render_report(rows, only_failures=True, max_failures=2)
+    assert out.count("## Failure") == 2
 
 
 def test_summarise_counts_pass_and_fail(tmp_settings: FuzzSettings) -> None:

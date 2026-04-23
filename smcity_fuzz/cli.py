@@ -6,6 +6,8 @@ Usage:
                                      [--topics id,id]
     uv run python -m smcity_fuzz report [--run-id run-xxx]
     uv run python -m smcity_fuzz failures [--run-id run-xxx] [--top N]
+    uv run python -m smcity_fuzz export [--run-id run-xxx] [--out PATH]
+                                        [--max-failures N] [--all]
 """
 
 from __future__ import annotations
@@ -14,9 +16,11 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from smcity_fuzz.datasets import TOPICS, DatasetTopic
 from smcity_fuzz.datasets import by_id as topic_by_id
+from smcity_fuzz.export import render_report
 from smcity_fuzz.personas import PERSONAS, LanguageCode, Persona
 from smcity_fuzz.personas import by_id as persona_by_id
 from smcity_fuzz.report import summarise
@@ -90,6 +94,26 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_export(args: argparse.Namespace) -> int:
+    rows = _filter_rows(read_rows(), args.run_id)
+    if not rows:
+        print("no rows found")
+        return 1
+    markdown = render_report(
+        rows,
+        only_failures=not args.all,
+        max_failures=args.max_failures,
+    )
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(markdown, encoding="utf-8")
+        print(f"wrote {out_path} ({len(markdown):,} chars)")
+    else:
+        print(markdown)
+    return 0
+
+
 def _cmd_failures(args: argparse.Namespace) -> int:
     rows = _filter_rows(read_rows(), args.run_id)
     failed = [r for r in rows if r.failed]
@@ -141,6 +165,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_fail.add_argument("--run-id", type=str, default=None)
     p_fail.add_argument("--top", type=int, default=20)
 
+    p_exp = sub.add_parser(
+        "export",
+        help=(
+            "Render a Markdown report for handoff to Claude / Gemini. Each "
+            "failure includes the question, reply, tool_trace, judge verdict "
+            "and the raw row JSON."
+        ),
+    )
+    p_exp.add_argument("--run-id", type=str, default=None)
+    p_exp.add_argument(
+        "--out",
+        type=str,
+        default=None,
+        help="write to FILE; omit to stream to stdout",
+    )
+    p_exp.add_argument(
+        "--max-failures",
+        type=int,
+        default=None,
+        help="cap the number of failure sections included (default: all)",
+    )
+    p_exp.add_argument(
+        "--all",
+        action="store_true",
+        help="include passing rows too (default: failures only)",
+    )
+
     return parser
 
 
@@ -153,6 +204,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_report(args)
     if args.cmd == "failures":
         return _cmd_failures(args)
+    if args.cmd == "export":
+        return _cmd_export(args)
     parser.error(f"unknown command {args.cmd!r}")
     return 2
 

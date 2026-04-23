@@ -2,6 +2,50 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.1] — 2026-04-23
+
+**Diagnostic-only guardrail + Markdown handoff export.** Intentional separation of roles: the fuzzer's LLM (gpt-oss-20b) only diagnoses defects; a frontier LLM (Claude / Gemini) that receives the exported report is the one that proposes code fixes.
+
+### Judge prompt tightened (`smcity_fuzz/judge.py`)
+
+Explicit new rules in the system prompt:
+- MUST NOT suggest, write, or describe any code fix
+- MUST NOT recommend prompt changes or new tools
+- MUST NOT speculate about why a bug exists inside the agent's implementation
+- MUST describe the observable defect in one sentence, nothing more
+
+Pinned by `test_judge_prompt_forbids_code_fixes` so a future refactor can't silently relax the guardrail.
+
+### New `smcity_fuzz export` subcommand + `smcity_fuzz/export.py`
+
+Renders a fuzz run as a single Markdown file suitable for pasting into a chat with Claude or Gemini. Each failure section includes:
+
+- Metadata header (run_id, timestamp, persona, language, topic, rubric scores, reason tags, judge summary)
+- Question (fenced code block)
+- Agent reply (fenced code block)
+- Tool trace (human-readable bullet list)
+- Pipeline errors if any
+- The full row as fenced JSON — for reproducing or quoting verbatim
+
+A banner at the top tells the receiving LLM: "this is diagnostic evidence — diagnose the top N failures and propose minimal code patches."
+
+CLI flags:
+- `--run-id run-xxx` — isolate one campaign (default: every row on disk)
+- `--out FILE` — write to a file instead of stdout
+- `--max-failures N` — cap section count for oversized runs
+- `--all` — include passing rows too (default: failures only)
+
+Typical handoff flow:
+```bash
+uv run python -m smcity_fuzz run --turns 40 --concurrency 2
+uv run python -m smcity_fuzz export --out handoff/2026-04-23-run.md
+# open handoff/2026-04-23-run.md, paste into Claude, say "diagnose + patch"
+```
+
+### Tests
+
+`test_judge_prompt_forbids_code_fixes`, `test_export_banner_forbids_code_suggestions`, `test_export_includes_failure_section_and_raw_json`, `test_export_only_failures_flag_excludes_passes`, `test_export_max_failures_caps_sections`. **219 tests green** (was 214), ruff + format + mypy strict clean across 72 source files.
+
 ## [0.4.0] — 2026-04-23
 
 **Adversarial fuzz harness.** New `smcity_fuzz/` package drives the production agent with LLM-generated questions and grades every reply with an LLM-as-judge — actual semantic testing instead of regex shape-checks.
