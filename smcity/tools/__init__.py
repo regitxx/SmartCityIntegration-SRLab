@@ -6,6 +6,7 @@ from smcity.tools.context import (
     CURRENT_WEATHER_TOOL,
     NINE_DAY_FORECAST_TOOL,
 )
+from smcity.tools.csdi import CSDI_QUERY_TOOL
 from smcity.tools.facility import FIND_NEARBY_COURTS_TOOL, FIND_NEARBY_POOLS_TOOL
 from smcity.tools.geo import ADDRESS_LOOKUP_TOOL
 from smcity.tools.housing import GET_ESTATE_INFO_TOOL, LIST_ESTATES_TOOL
@@ -55,6 +56,8 @@ def build_default_registry() -> ToolRegistry:
         # facility
         FIND_NEARBY_COURTS_TOOL,
         FIND_NEARBY_POOLS_TOOL,
+        # CSDI (generic live FeatureServer query)
+        CSDI_QUERY_TOOL,
         # housing
         GET_ESTATE_INFO_TOOL,
         LIST_ESTATES_TOOL,

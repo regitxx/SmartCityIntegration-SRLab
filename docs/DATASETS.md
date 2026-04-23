@@ -90,17 +90,24 @@ Same unified tool — different category values.
 
 ## Extras shipped alongside the xlsx list (from the user's original brief)
 
-These aren't in the workbook but answer the original "smart city for a social robot" requirements. They stay bundled because the live equivalents (CSDI ArcGIS services) need service-ID discovery we haven't automated yet:
+These aren't in the workbook but answer the original "smart city for a social robot" requirements. They stay bundled alongside a live-upgrade path via CSDI:
 
 | Domain | Status | Tool(s) |
 |---|---|---|
-| LCSD basketball courts | 🟨 bundled (15 courts) | `facility.find_nearby_courts` |
-| LCSD swimming pools | 🟨 bundled (10 pools) | `facility.find_nearby_pools` |
-| HKHA public housing estates | 🟨 bundled (10 estates) | `housing.get_estate_info`, `housing.list_estates_in_district` |
+| LCSD basketball courts | 🟨 bundled (15 courts) · live via `csdi.query_features` when registered | `facility.find_nearby_courts` / `csdi.query_features` |
+| LCSD swimming pools | 🟨 bundled (10 pools) · live via `csdi.query_features` when registered | `facility.find_nearby_pools` / `csdi.query_features` |
+| HKHA public housing estates | 🟨 bundled (10 estates) · live via `csdi.query_features` when registered | `housing.*` / `csdi.query_features` |
 | MTR line topology (10 lines) | 🟨 bundled | used by `transport.plan_simple_route` |
 | MTR station catalog (105 stations, trilingual) | 🟨 bundled | used by the MTR ETA + planner tools |
 
-Upgrade path: once the CSDI ArcGIS service-ID catalog is mapped (service → dataset title lookup), swap each of these to live FeatureServer queries. Tracked as v0.4+ work.
+**Live-upgrade scaffold (v0.3.2).** `smcity/tools/csdi.py` ships a generic
+`csdi.query_features(dataset, where, bbox, limit)` tool that proxies any
+registered CSDI ArcGIS FeatureServer endpoint. The dataset registry
+(`CSDI_DATASETS`) is populated per-dataset as each endpoint is verified in
+`docs/research/06_csdi_endpoints.md`. The bundled tools remain the canonical
+path until the live endpoints have coverage for name/district/capacity
+parity with the bundled JSON; the switch-over is a one-line registry edit
+per dataset.
 
 ---
 
@@ -112,4 +119,4 @@ Upgrade path: once the CSDI ArcGIS service-ID catalog is mapped (service → dat
 - **5 extra live data.gov.hk endpoints** (MTR / KMB / Citybus / GMB / HKO / EPD / ALS) from outside the workbook, covering the original lab brief.
 - **3 bundled-data tools** (LCSD × 2 + HKHA × 1) outside the workbook scope; live upgrade tracked for v0.4+.
 
-Total tools in the registry: **25** (v0.2.0 was 22; v0.3.0 adds `geo.search_osm_pois`, `transport.get_gmb_eta`, `context.get_9day_forecast`).
+Total tools in the registry: **26** (v0.2.0 was 22; v0.3.0 added `geo.search_osm_pois`, `transport.get_gmb_eta`, `context.get_9day_forecast`; v0.3.2 added `csdi.query_features`).
