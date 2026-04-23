@@ -2,6 +2,58 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.6] — 2026-04-23
+
+**Response-accuracy scaffolding** — the user flagged that what matters isn't bug count, it's whether responses are actually good and factually accurate. This commit builds the accuracy-quality scaffolding so the fuzzer, the judge, and any future diagnostic session (Claude / Gemini) all grade the same way.
+
+### `README.md` rewritten for v0.4.6 reality
+
+Old README was stuck at v0.1.0 / 18 tools / 129 tests and never mentioned the fuzzer, OTP2, CSDI live data, or the hardening layers. New README:
+- Status line at the top: 27 tools · 232 unit + 7 integration tests · ruff / format / mypy strict clean.
+- Adversarial-fuzzer section with the exact commands + handoff-to-Claude/Gemini flow.
+- OTP2 multimodal section with the activation steps.
+- Updated layout tree reflecting the real 4 packages (`smcity/` + `smcity_fuzz/` + `otp/` + `web/`).
+- Demo transcripts use live data (Choi Hung Estate from the HKHA feed, Sha Tin 7 courts from CSDI).
+- Feature inventory matches the actual 27 tools per domain.
+- Security posture summary links to DEPLOY.md threat model.
+
+### New: `docs/ACCURACY_REVIEW.md`
+
+Hand-curated risk register — every known way responses can drift, grouped by the code layer responsible. Ten sections:
+
+1. Intent misidentification (wrong_tool)
+2. Language drift (wrong_language, english_in_cantonese, mandarin_in_cantonese)
+3. Factual drift vs tool output (hallucinated_fact, stale_data)
+4. Wrongful refusals (refused_wrongly)
+5. Structural leaks (harmony_leak, empty_reply, incomplete)
+6. Disambiguation failure
+7. Routing correctness
+8. Rate-limit + session hygiene
+9. What the judge should NOT flag (rubric-noise suppression)
+10. How to run a full accuracy pass
+
+Each failure mode names the past live incident (where one exists), the exact tag the judge should emit, and the code layer that contains the mitigation knob. Claude / Gemini receiving the fuzzer export can use this as grading criteria.
+
+### New: `tests/test_response_quality.py` (20 tests)
+
+Regression pins for the specific live bugs from past chat transcripts. Won't reach a real LLM — pins the SYSTEM_PROMPT wording, few-shot exemplars, language-stick reminders, polish behaviour, and source-footer rewrite.
+
+Test categories:
+- SYSTEM_PROMPT safety + routing (6 tests): Cantonese priority, no hallucinated facts, plan_journey-not-ask_user for ambiguous travel, per-mode routing table, harmony-tokens-forbidden, no-self-written-src-footer.
+- Cantonese style block content (2 tests): all key particles named, ≥6 FORMAL/CANTO exemplars.
+- `language_stick_reminder` + `fast_path_synthesis_hint` (3 tests): bilingual-field pullover forbidden, language + tts_locale forwarded, forced-vs-detected marked.
+- `_maybe_polish` only fires on yue (1 test — critical; polishing English would corrupt it).
+- Source-footer rewrite (4 tests): strips LLM-invented fakes, removes any src when no real citations, tolerates full-width colon `src：`, dedups repeated tool.
+- Polish over-eager-substitution guards (3 tests): English in mixed reply untouched, 的士 / 正在 / 了解 / 了結 stays intact, proper-noun `現代` not mangled.
+- Orchestrator retry mitigation (1 test): `_stream_final` retry prompt pins "STOP CALLING TOOLS" guard-phrase.
+
+A refactor that silently drops "Cantonese is the priority language" from the prompt, or weakens the "STOP CALLING TOOLS" retry, or forgets that `_maybe_polish` should be gated to `yue`, now fails at CI time instead of in front of a Cantonese user.
+
+### Gate
+
+- **252 unit tests + 7 integration tests green** (was 232 + 7).
+- ruff + format + mypy strict clean across 77 source files.
+
 ## [0.4.5] — 2026-04-23
 
 **Docs + metadata drift fix.** No runtime changes; this commit reconciles stale strings and incorrect claims so the repo state on disk matches shipped reality.

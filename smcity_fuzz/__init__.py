@@ -14,4 +14,4 @@ endpoint, zero new infra, ~5x faster per token than using 120b for
 everything.
 """
 
-__version__ = "0.4.5"
+__version__ = "0.4.6"

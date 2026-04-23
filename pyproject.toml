@@ -1,6 +1,6 @@
 [project]
 name = "smcity"
-version = "0.4.5"
+version = "0.4.6"
 description = "HK Smart City agentic chat for the Lab of Social Robotics"
 readme = "README.md"
 requires-python = ">=3.12"
