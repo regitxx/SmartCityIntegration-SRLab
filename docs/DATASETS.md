@@ -96,7 +96,7 @@ These aren't in the workbook but answer the original "smart city for a social ro
 |---|---|---|
 | LCSD basketball courts | ✅ **live (305 venues, 19 districts)** via CSDI | `facility.find_nearby_courts` |
 | LCSD swimming pools | ✅ **live (46 pools)** via CSDI | `facility.find_nearby_pools` |
-| HKHA public housing estates | 🟨 bundled (10 estates) · live Housing Authority JSON API tracked for v0.3.5+ | `housing.*` |
+| HKHA public housing estates | ✅ **live (241 estates, 17 districts)** via Housing Authority open-data API | `housing.get_estate_info`, `housing.list_estates_in_district` |
 | MTR line topology (10 lines) | 🟨 bundled | used by `transport.plan_simple_route` |
 | MTR station catalog (105 stations, trilingual) | 🟨 bundled | used by the MTR ETA + planner tools |
 

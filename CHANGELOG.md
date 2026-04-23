@@ -2,6 +2,63 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.2] — 2026-04-23
+
+**HKHA live + EPD AQHI regression fix.** End-to-end "check if all works" pass — **14/14 tools pass live**.
+
+### HKHA → live (`smcity/tools/housing.py`)
+
+Coverage jumps **10 bundled estates → 241 live** across 17 districts. Same tool interfaces (`housing.get_estate_info`, `housing.list_estates_in_district`) — no prompt change.
+
+- Source: `data.housingauthority.gov.hk/psi/rest/export/prh-estates?format=json` (not ArcGIS REST — a dedicated client rather than the CSDI generic tool).
+- Module-level catalog cache with 24 h TTL + asyncio lock (same pattern as facility).
+- Numeric coercion: parses `"8 200 as at 31.12.2025"` → `8200` via `_INT_PREFIX` regex; keeps the raw string in `flats_raw` for auditability.
+- **TC name overlay** at `data/hkha_name_map_tc.json` — hand-curated 29-entry English→繁體 map so Cantonese users hitting popular estates still match (e.g. "彩虹" → Choi Hung Estate, "美孚" → Mei Foo Sun Chuen). Estates outside the map still match by English name; the tool description notes this up front.
+
+### EPD AQHI endpoint repaired (`smcity/tools/context.py`)
+
+Live smoke test caught a real production regression: `context.get_aqhi` was pointing at `www.aqhi.gov.hk/api/history-last-24-hours-aqhi.json` which now returns HTTP 404. Replaced with the current per-station RSS feed:
+
+- **New URL**: `https://www.aqhi.gov.hk/epd/ddata/html/out/aqhi_ind_rss_Eng.xml`
+- New parser: `xml.etree.ElementTree` + a regex over each `<item>`'s `<description>` CDATA block (e.g. `"Central/Western - General Stations: 3 Low - Thu, 23 Apr 2026 13:30"`).
+- Returns the same `AQHIStation(station, aqhi, health_risk, update_time)` shape — no caller-side changes needed.
+
+### Live smoke test (validates everything)
+
+14 production tools exercised against real upstreams in a single script:
+
+| tool | status | notes |
+|---|---|---|
+| housing.get_estate_info (EN + TC) | ok | matches "Choi Hung Estate" both ways |
+| housing.list_estates_in_district | ok | 19 estates in Sham Shui Po |
+| facility.find_nearby_courts | ok | 5 courts near Sheung Wan (cold fetch ~2 s) |
+| facility.find_nearby_pools | ok | 3 Wan Chai pools |
+| geo.address_lookup | ok | ALS responded |
+| context.get_current_weather | ok | 28°C |
+| context.get_active_warnings | ok | 0 warnings active |
+| context.get_aqhi | **fixed** | 5 stations, "Central/Western = 3 Low" |
+| context.get_9day_forecast | ok | 9 days |
+| transport.get_mtr_next_trains | ok | 8 trains @ Central |
+| transport.get_kmb_eta_by_stop | ok | 5 ETAs |
+| geo.search_osm_pois | ok | 20 public toilets |
+| csdi.query_features | ok | 3 Sha Tin courts |
+
+### Files removed
+
+- `data/hkha_estates.json` — bundled 10-entry snapshot (replaced by live 241-entry feed).
+
+### Files added
+
+- `data/hkha_name_map_tc.json` — 29-entry English→繁體 name overlay for the most-asked estates.
+
+### Tests
+
+- `test_housing_estate_info_fuzzy_en_and_tc` — proves both EN queries (Choi Hung, Mei Foo, Tak Long) and 繁體 queries (彩虹, 美孚, via overlay) resolve to the right estate.
+- `test_housing_parses_numeric_with_trailing_text` — pins the "8 200 as at 31.12.2025" → 8200 parser.
+- `test_housing_list_estates_in_district` — verifies district filter hits multiple estates.
+- `test_housing_region_filter` — verifies region filter narrows further.
+- **221 tests green** (was 219), ruff + format + mypy strict clean across 72 source files.
+
 ## [0.4.1] — 2026-04-23
 
 **Diagnostic-only guardrail + Markdown handoff export.** Intentional separation of roles: the fuzzer's LLM (gpt-oss-20b) only diagnoses defects; a frontier LLM (Claude / Gemini) that receives the exported report is the one that proposes code fixes.

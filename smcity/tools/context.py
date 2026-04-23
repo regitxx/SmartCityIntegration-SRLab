@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+import re
+from typing import Literal
+from xml.etree import ElementTree as ET
 
 import httpx
 from pydantic import BaseModel, Field
@@ -10,8 +12,10 @@ from pydantic import BaseModel, Field
 from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
 
 HKO_BASE = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php"
-AQHI_STATIONS_URL = "https://www.aqhi.gov.hk/epd/ddata/html/out/aqhirss_Eng.xml"  # fallback
-AQHI_PRIMARY_URL = "https://www.aqhi.gov.hk/api/history-last-24-hours-aqhi.json"
+# Per-station RSS — the legacy JSON API was retired and now returns 404.
+# This feed publishes one <item> per monitoring station with the AQHI band,
+# health-risk label, and timestamp in the <description> CDATA.
+AQHI_STATIONS_URL = "https://www.aqhi.gov.hk/epd/ddata/html/out/aqhi_ind_rss_Eng.xml"
 
 
 def _lang_param(query_lang: str) -> Literal["en", "tc", "sc"]:
@@ -279,39 +283,71 @@ class AQHIResult(BaseModel):
     source: str = "epd.aqhi"
 
 
+_AQHI_DESC_RE = re.compile(
+    r"^\s*(?P<station>[^-]+?)\s*-\s*"
+    r"(?:General|Roadside)\s+Stations?:\s*(?P<aqhi>[\d/+\-]+)\s+"
+    r"(?P<risk>Low|Moderate|High|Very\s+High|Serious|Health\s+Risk)\s*-\s*"
+    r"(?P<time>.+?)\s*$"
+)
+
+
+def _parse_aqhi_rss(xml_text: str) -> list[AQHIStation]:
+    """Extract station rows from the EPD per-station RSS feed.
+
+    Each <item> has shape:
+        <title>Central/Western</title>
+        <description><![CDATA[Central/Western - General Stations: 3 Low - <ts>]]></description>
+
+    We use `xml.etree` (stdlib) to avoid an lxml dependency.
+    """
+    try:
+        root = ET.fromstring(xml_text)  # noqa: S314 — trusted EPD gov.hk endpoint
+    except ET.ParseError:
+        return []
+    stations: list[AQHIStation] = []
+    for item in root.iter("item"):
+        title_el = item.find("title")
+        desc_el = item.find("description")
+        name = (title_el.text or "").strip() if title_el is not None and title_el.text else ""
+        desc = (desc_el.text or "").strip() if desc_el is not None and desc_el.text else ""
+        if not name or not desc:
+            continue
+        match = _AQHI_DESC_RE.match(desc)
+        if match:
+            aqhi_raw = match.group("aqhi").strip()
+            aqhi: int | str | None
+            try:
+                aqhi = int(aqhi_raw)
+            except ValueError:
+                aqhi = aqhi_raw or None
+            stations.append(
+                AQHIStation(
+                    station=name,
+                    aqhi=aqhi,
+                    health_risk=match.group("risk").strip(),
+                    update_time=match.group("time").strip(),
+                )
+            )
+        else:
+            # Fallback: keep the station name even if the description doesn't parse.
+            stations.append(
+                AQHIStation(station=name, aqhi=None, health_risk=None, update_time=None)
+            )
+    return stations
+
+
 async def _aqhi_handler(args: AQHIArgs, ctx: ToolContext) -> AQHIResult:
     try:
         async with httpx.AsyncClient(timeout=5.0) as h:
-            r = await h.get(AQHI_PRIMARY_URL)
+            r = await h.get(AQHI_STATIONS_URL)
             r.raise_for_status()
-            data: Any = r.json()
+            xml_text = r.text
     except httpx.HTTPError as err:
         raise ToolUpstreamError(f"EPD AQHI failed: {err}") from err
 
-    stations: list[AQHIStation] = []
-    # Schema variance: endpoint has changed shape over time. Normalise heuristically.
-    if isinstance(data, list):
-        records = data
-    elif isinstance(data, dict):
-        records = data.get("data") or data.get("stations") or []
-    else:
-        records = []
-
-    for rec in records[-50:]:  # last-24-hour rolling endpoint — take the most recent
-        if not isinstance(rec, dict):
-            continue
-        name = rec.get("StationName") or rec.get("station") or rec.get("name")
-        aqhi = rec.get("aqhi") or rec.get("AQHI")
-        health = rec.get("health_risk") or rec.get("HealthRisk")
-        t = rec.get("DateTime") or rec.get("time") or rec.get("update_time")
-        if not name:
-            continue
-        stations.append(
-            AQHIStation(station=str(name), aqhi=aqhi, health_risk=health, update_time=t)
-        )
+    stations = _parse_aqhi_rss(xml_text)
 
     if args.near and stations:
-        # cheap contains-match; good enough for Phase 1a.
         needle = args.near.lower()
         stations.sort(key=lambda s: 0 if needle in s.station.lower() else 1)
 

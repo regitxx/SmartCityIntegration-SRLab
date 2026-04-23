@@ -1,3 +1,4 @@
+# ruff: noqa: RUF001
 """Unit tests for Phase 1b tools — facility, housing, KMB, Citybus, cross-stop search."""
 
 from __future__ import annotations
@@ -10,7 +11,9 @@ import respx
 
 from smcity.tools import build_default_registry
 from smcity.tools import facility as facility_mod
+from smcity.tools import housing as housing_mod
 from smcity.tools.csdi import CSDI_DATASETS
+from smcity.tools.housing import HKHA_LIVE_URL
 from smcity.tools.registry import ToolContext
 from smcity.tools.transport_citybus import CITYBUS_BASE
 from smcity.tools.transport_kmb import KMB_BASE
@@ -254,35 +257,149 @@ async def test_pools_name_query(mock_csdi_facility: Any) -> None:
     assert any("Victoria" in p["name_en"] for p in result.result["pools"])
 
 
+# --- housing tests: mock the Housing Authority live JSON API -------------
+
+
+def _hkha_row(
+    name_en: str,
+    district: str,
+    region: str,
+    lat: str,
+    lng: str,
+    *,
+    estate_type: str = "Public Rental Housing",
+    blocks: str = "10",
+    flats: str = "5 000 as at 31.12.2025",
+    flat_size: str = "14 – 40",
+    year: str = "1990",
+) -> dict[str, Any]:
+    return {
+        "Estate_Name": name_en,
+        "District_Name": district,
+        "Region_Name": region,
+        "Map_Latitude": lat,
+        "Map_Longitude": lng,
+        "Type_of_Estate": estate_type,
+        "Year_of_Intake": year,
+        "No_of_Blocks": blocks,
+        "No_of_Rental_Flats": flats,
+        "Flat_Size_m2": flat_size,
+        "Estate_Website": "",
+    }
+
+
+@pytest.fixture
+def mock_hkha_live() -> Any:
+    """Patch the HKHA live JSON endpoint + reset the module-level cache."""
+    housing_mod._reset_catalog_for_tests()
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(HKHA_LIVE_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        _hkha_row(
+                            "Choi Hung Estate",
+                            "Wong Tai Sin",
+                            "Kowloon",
+                            "22.3348",
+                            "114.2087",
+                            blocks="11",
+                            flats="7 455 as at 31.12.2025",
+                        ),
+                        _hkha_row(
+                            "Mei Foo Sun Chuen",
+                            "Sham Shui Po",
+                            "Kowloon",
+                            "22.3375",
+                            "114.1378",
+                            estate_type="Home Ownership Scheme",
+                            blocks="99",
+                            flats="13 149",
+                        ),
+                        _hkha_row(
+                            "Shek Kip Mei Estate", "Sham Shui Po", "Kowloon", "22.3331", "114.1683"
+                        ),
+                        _hkha_row(
+                            "Tak Long Estate", "Kowloon City", "Kowloon", "22.330105", "114.2031"
+                        ),
+                        # No-TC-map entry: EN-only fuzzy match only.
+                        _hkha_row(
+                            "Happy Fake Estate",
+                            "Central & Western",
+                            "Hong Kong Island",
+                            "22.2820",
+                            "114.1582",
+                        ),
+                    ]
+                },
+            )
+        )
+        yield mock
+    housing_mod._reset_catalog_for_tests()
+
+
 @pytest.mark.asyncio
-async def test_housing_estate_info_fuzzy() -> None:
+async def test_housing_estate_info_fuzzy_en_and_tc(mock_hkha_live: Any) -> None:
     registry = build_default_registry()
     ctx = ToolContext(session_id="t", locale="yue", query_lang="zh-Hant")
-    for needle, expected_id in [
-        ("Choi Hung", "CHOI"),
-        ("彩虹", "CHOI"),
-        ("Mei Foo", "MEIF"),
-        ("美孚", "MEIF"),
+    for needle, expected_name in [
+        ("Choi Hung", "Choi Hung Estate"),
+        ("彩虹", "Choi Hung Estate"),  # via TC overlay
+        ("Mei Foo", "Mei Foo Sun Chuen"),
+        ("美孚", "Mei Foo Sun Chuen"),  # via TC overlay
+        ("Tak Long", "Tak Long Estate"),
+        ("Happy Fake", "Happy Fake Estate"),  # EN-only, still matches
     ]:
         result = await registry.dispatch("housing.get_estate_info", {"name": needle}, ctx)
-        assert result.status == "ok"
+        assert result.status == "ok", result.error
         assert result.result is not None
         match = result.result.get("match")
         assert match is not None, f"no match for {needle}"
-        assert match["id"] == expected_id
+        assert match["name_en"] == expected_name
 
 
 @pytest.mark.asyncio
-async def test_housing_list_estates_in_district() -> None:
+async def test_housing_parses_numeric_with_trailing_text(mock_hkha_live: Any) -> None:
+    registry = build_default_registry()
+    ctx = ToolContext(session_id="t")
+    result = await registry.dispatch("housing.get_estate_info", {"name": "Choi Hung"}, ctx)
+    assert result.status == "ok"
+    assert result.result is not None
+    match = result.result["match"]
+    assert match is not None
+    assert match["flats"] == 7455  # parsed past the "as at ..." suffix
+    assert "as at" in match["flats_raw"]
+    assert match["blocks"] == 11
+
+
+@pytest.mark.asyncio
+async def test_housing_list_estates_in_district(mock_hkha_live: Any) -> None:
     registry = build_default_registry()
     ctx = ToolContext(session_id="t")
     result = await registry.dispatch(
-        "housing.list_estates_in_district", {"district": "Wong Tai Sin"}, ctx
+        "housing.list_estates_in_district", {"district": "Sham Shui Po"}, ctx
     )
     assert result.status == "ok"
     assert result.result is not None
-    ids = {e["id"] for e in result.result["estates"]}
-    assert "CHOI" in ids or "CHUK" in ids
+    names = {e["name_en"] for e in result.result["estates"]}
+    assert "Mei Foo Sun Chuen" in names
+    assert "Shek Kip Mei Estate" in names
+
+
+@pytest.mark.asyncio
+async def test_housing_region_filter(mock_hkha_live: Any) -> None:
+    registry = build_default_registry()
+    ctx = ToolContext(session_id="t")
+    result = await registry.dispatch(
+        "housing.list_estates_in_district",
+        {"district": "Central", "region": "Hong Kong Island"},
+        ctx,
+    )
+    assert result.status == "ok"
+    assert result.result is not None
+    # Region filter is substring — "Hong Kong Island" matches "Hong Kong Island".
+    assert any(e["name_en"] == "Happy Fake Estate" for e in result.result["estates"])
 
 
 @pytest.mark.asyncio
