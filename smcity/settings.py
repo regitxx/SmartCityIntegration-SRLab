@@ -31,6 +31,17 @@ class Settings(BaseSettings):
     session_ttl_hours: int = Field(default=24, ge=1, le=24 * 30)
     pii_redact_at_ingress: bool = Field(default=True)
 
+    # WebSocket origin allow-list. Comma-separated host[:port] or scheme://host
+    # entries — empty string (default) means accept same-origin requests only.
+    # Use `*` to disable the check entirely (NOT recommended off-tailnet).
+    ws_allowed_origins: str = Field(default="")
+
+    # Per-session rate limit (token-bucket): refill `rate_per_min` tokens per
+    # minute, burst up to `rate_burst`. Each turn costs one token. Disabled
+    # when either value is 0.
+    rate_per_min: int = Field(default=30, ge=0, le=600)
+    rate_burst: int = Field(default=10, ge=0, le=120)
+
 
 @cache
 def get_settings() -> Settings:

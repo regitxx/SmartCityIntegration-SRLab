@@ -14,6 +14,7 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, Field
 
+from smcity.geometry import haversine_m as _haversine_m
 from smcity.tools.geo import ALS_URL
 from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
 
@@ -24,15 +25,6 @@ _TAXI_FLAG_HKD = 27.0  # first 2 km
 _TAXI_FLAG_DISTANCE_M = 2000
 _TAXI_INCREMENT_HKD = 1.9  # per 200 m after the first 2 km
 _TAXI_INCREMENT_DISTANCE_M = 200
-
-
-def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    r = 6371000.0
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lng2 - lng1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
 
 
 async def _geocode_one(query: str) -> tuple[float, float] | None:

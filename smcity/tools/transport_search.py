@@ -8,25 +8,15 @@ Citybus is excluded from the proximity index for now (no list-all-stops API).
 
 from __future__ import annotations
 
-import math
-
 from pydantic import BaseModel, Field
 from rapidfuzz import fuzz, process
 
+from smcity.geometry import haversine_km as _haversine_km
 from smcity.tools.registry import ToolContext, ToolSpec
 from smcity.tools.transport import _load_stations
 from smcity.tools.transport_kmb import KMBStop, kmb_catalog
 
 # --- helpers -------------------------------------------------------------
-
-
-def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    r = 6371.0
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lng2 - lng1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
 
 
 # MTR stations don't carry live lat/lng in our static catalog. We keep a small

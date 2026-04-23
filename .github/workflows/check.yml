@@ -20,3 +20,33 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy smcity tests
       - run: uv run pytest -q -m "not integration"
+
+  audit:
+    runs-on: ubuntu-latest
+    # Dependency-vulnerability scan. Fails CI on any HIGH/CRITICAL finding from
+    # either source. Runs on the same trigger as `check` so you can't sneak a
+    # compromised package past the gate.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --extra dev
+      - name: Export locked deps for audit
+        # Export the uv lockfile as a hash-pinned requirements.txt, excluding
+        # the local editable `smcity` package (not on PyPI).
+        run: uv export --format requirements-txt --no-emit-project --all-extras -o /tmp/smcity-reqs.txt
+      - name: pip-audit
+        # `--strict` flips any warning into a non-zero exit; fail the build.
+        run: uv run pip-audit --strict -r /tmp/smcity-reqs.txt
+      - name: Install osv-scanner
+        run: |
+          curl -sSfL \
+            https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 \
+            -o "$HOME/.local/bin/osv-scanner"
+          chmod +x "$HOME/.local/bin/osv-scanner"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: osv-scanner
+        # Scan the uv lockfile for known vulnerabilities. Fails on HIGH+.
+        run: osv-scanner --lockfile=uv.lock

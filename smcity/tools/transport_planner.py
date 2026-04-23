@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import heapq
 import json
-import math
 from dataclasses import dataclass
 from functools import cache
 from itertools import pairwise
@@ -27,6 +26,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from smcity.geometry import haversine_m as _haversine_m
 from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
 from smcity.tools.transport import _load_stations as load_mtr_stations
 from smcity.tools.transport_search import MTR_STATION_COORDS
@@ -80,15 +80,6 @@ def _topology() -> _Topology:
 
 
 # --- graph helpers -------------------------------------------------------
-
-
-def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    r = 6371000.0
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lng2 - lng1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
 
 
 def _nearest_mtr_station(

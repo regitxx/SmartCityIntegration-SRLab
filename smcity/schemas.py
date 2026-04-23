@@ -9,6 +9,11 @@ from pydantic import BaseModel, Field
 
 LocaleCode = str  # ISO 639-1/3 or "auto"; validated against a known set at the router edge.
 
+# Session IDs travel on the WebSocket URL path; keep them to an opaque ASCII
+# token so we can't smuggle control chars, slashes, or UTF-8 gremlins into the
+# SQLite layer. Mirrors smcity.session._SESSION_ID_RE.
+_SESSION_ID_PATTERN = r"^[A-Za-z0-9_.-]{1,64}$"
+
 
 class UserLocation(BaseModel):
     lat: float = Field(ge=-90, le=90)
@@ -19,7 +24,7 @@ class UserLocation(BaseModel):
 class TurnRequest(BaseModel):
     """Body for `POST /turn`."""
 
-    session_id: str = Field(min_length=1, max_length=128)
+    session_id: str = Field(pattern=_SESSION_ID_PATTERN)
     text: str = Field(min_length=1, max_length=4000)
     locale_override: LocaleCode | None = Field(
         default=None,

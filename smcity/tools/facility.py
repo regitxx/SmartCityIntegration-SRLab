@@ -8,7 +8,6 @@ GeoJSON endpoint once we've normalised the coord-system gotcha.
 from __future__ import annotations
 
 import json
-import math
 from functools import cache
 from pathlib import Path
 from typing import Literal
@@ -16,18 +15,10 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from rapidfuzz import fuzz, process
 
+from smcity.geometry import haversine_km as _haversine_km
 from smcity.tools.registry import ToolContext, ToolSpec
 
 _DATA_ROOT = Path(__file__).resolve().parent.parent.parent / "data"
-
-
-def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    r = 6371.0
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lng2 - lng1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
 
 
 # --- shared models --------------------------------------------------------

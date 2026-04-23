@@ -1,5 +1,6 @@
 // archive underground · Phase 1a UI client
 // Wires: language selector + WebSocket to /ws/:session_id + live tool_call events + final message render.
+// All dynamic text is written via textContent / DOM construction (no innerHTML with user or upstream data).
 
 const SESSION_ID = (() => {
   const key = "smcity.session";
@@ -24,24 +25,43 @@ function hhmmss(d = new Date()) {
   return d.toTimeString().slice(0, 8);
 }
 
+// --- DOM builders (textContent only) -------------------------------------
+
+function el(tag, { className, text, attrs } = {}) {
+  const n = document.createElement(tag);
+  if (className) n.className = className;
+  if (text !== undefined) n.textContent = text;
+  if (attrs) for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  return n;
+}
+
+function chip(label, variant) {
+  return el("span", { className: variant ? `chip ${variant}` : "chip", text: label });
+}
+
 function addMessage({ who, text, lang, srcFooter }) {
-  const msg = document.createElement("div");
-  msg.className = `msg ${who}`;
-  const meta = document.createElement("div");
-  meta.className = "meta";
+  const msg = el("div", { className: `msg ${who}` });
+
+  const meta = el("div", { className: "meta" });
   const glyph = who === "user" ? "≥" : who === "agent" ? "·" : "*";
-  meta.innerHTML = `<span class="who">${glyph} ${who}</span><span class="time">${hhmmss()}</span>${lang ? `<span class="lang">${lang}</span>` : ""}`;
-  const body = document.createElement("div");
-  body.className = "body";
+  meta.append(
+    el("span", { className: "who", text: `${glyph} ${who}` }),
+    el("span", { className: "time", text: hhmmss() }),
+  );
+  if (lang) meta.append(el("span", { className: "lang", text: lang }));
+
+  const body = el("div", { className: "body", text });
   if (lang) body.setAttribute("lang", lang);
-  body.textContent = text;
+
   msg.append(meta, body);
+
   if (srcFooter) {
-    const foot = document.createElement("div");
-    foot.className = "footer-src";
-    foot.innerHTML = srcFooter;
+    const foot = el("div", { className: "footer-src" });
+    // srcFooter is a list of {label, variant} chips — never raw HTML.
+    for (const item of srcFooter) foot.append(chip(item.label, item.variant));
     msg.append(foot);
   }
+
   dialogue.append(msg);
   dialogue.scrollTop = dialogue.scrollHeight;
   return msg;
@@ -51,36 +71,45 @@ let _traceCursor = 0;
 let _turnOpen = false;
 
 function resetTrace() {
-  trace.innerHTML = "";
+  trace.replaceChildren();
   _traceCursor = 0;
 }
 
 function addTraceStart({ name, args, query_lang }) {
   _traceCursor += 1;
-  const li = document.createElement("li");
+  const li = el("li");
   li.dataset.tool = name;
   li.dataset.idx = String(_traceCursor);
-  li.innerHTML = `<span class="idx">[${String(_traceCursor).padStart(2, "0")}]</span><span class="name">${name}</span><span class="args">${args ? JSON.stringify(args) : ""}</span><span class="status running">· running${query_lang ? ` · lang=${query_lang}` : ""}</span>`;
+  li.append(
+    el("span", { className: "idx", text: `[${String(_traceCursor).padStart(2, "0")}]` }),
+    el("span", { className: "name", text: name }),
+    el("span", { className: "args", text: args ? JSON.stringify(args) : "" }),
+    el("span", {
+      className: "status running",
+      text: `· running${query_lang ? ` · lang=${query_lang}` : ""}`,
+    }),
+  );
   trace.append(li);
   trace.scrollTop = trace.scrollHeight;
 }
 
 function addTraceResult({ name, status, latency_ms, error }) {
   const open = [...trace.querySelectorAll("li")].reverse().find(
-    (li) => li.dataset.tool === name && li.querySelector(".status.running")
+    (li) => li.dataset.tool === name && li.querySelector(".status.running"),
   );
   if (!open) return;
   const glyph = STATUS_GLYPH[status] || "?";
-  open.querySelector(".status").className = `status ${status}`;
-  open.querySelector(".status").textContent = `· ${glyph} ${status} · ${latency_ms} ms${error ? ` · ${error}` : ""}`;
+  const statusEl = open.querySelector(".status");
+  statusEl.className = `status ${status}`;
+  statusEl.textContent = `· ${glyph} ${status} · ${latency_ms} ms${error ? ` · ${error}` : ""}`;
 }
 
-function renderLangChip(langInfo) {
-  if (!langInfo) return "";
+function langChip(langInfo) {
+  if (!langInfo) return null;
   const { source, primary_lang, translation_applied } = langInfo;
   return translation_applied
-    ? `<span class="chip translated">translated: ${primary_lang}</span>`
-    : `<span class="chip native">${source}: ${primary_lang}</span>`;
+    ? chip(`translated: ${primary_lang}`, "translated")
+    : chip(`${source}: ${primary_lang}`, "native");
 }
 
 // --- WebSocket wiring ------------------------------------------------------
@@ -95,7 +124,8 @@ ws.addEventListener("close", () => {
   addMessage({ who: "system", text: "disconnected" });
 });
 
-let _draftBody = null;  // the .body element we stream tokens into
+let _draftingNode = null;  // the message element currently being streamed into
+let _draftBody = null;     // the .body element we stream tokens into
 let _turnStartedAt = 0;
 
 ws.addEventListener("message", (ev) => {
@@ -118,14 +148,10 @@ ws.addEventListener("message", (ev) => {
         lang: msg.detected_lang,
       });
       _draftBody = _draftingNode.querySelector(".body");
-      // Pre-fill with a subtle placeholder until first token arrives.
       if (_draftBody) _draftBody.classList.add("streaming");
       if (msg.fast_path) {
         const meta = _draftingNode.querySelector(".meta");
-        if (meta) meta.insertAdjacentHTML(
-          "beforeend",
-          `<span class="chip">fast-path: ${msg.fast_path}</span>`
-        );
+        if (meta) meta.append(chip(`fast-path: ${msg.fast_path}`));
       }
       break;
     case "tool_call.start":
@@ -143,22 +169,21 @@ ws.addEventListener("message", (ev) => {
         dialogue.scrollTop = dialogue.scrollHeight;
       }
       break;
-    case "turn.final":
+    case "turn.final": {
       _turnOpen = false;
       const d = msg.data;
       if (_draftingNode && _draftBody) {
         // If streaming produced text, keep it; otherwise fall back to final text.
         if (!_draftBody.textContent.trim()) _draftBody.textContent = d.text || "";
         _draftBody.classList.remove("streaming");
-        // Append source footer to the drafting message rather than creating a new one.
-        const foot = document.createElement("div");
-        foot.className = "footer-src";
-        foot.innerHTML =
-          renderLangChip(d.lang) +
-          (d.citations?.length
-            ? `<span class="chip">src: ${d.citations.map((c) => c.tool.split(".").pop()).join(" · ")}</span>`
-            : "") +
-          `<span class="chip">${d.elapsed_ms} ms</span>`;
+        const foot = el("div", { className: "footer-src" });
+        const lc = langChip(d.lang);
+        if (lc) foot.append(lc);
+        if (d.citations?.length) {
+          const shorts = d.citations.map((c) => c.tool.split(".").pop()).join(" · ");
+          foot.append(chip(`src: ${shorts}`));
+        }
+        foot.append(chip(`${d.elapsed_ms} ms`));
         _draftingNode.append(foot);
       } else {
         addMessage({ who: "agent", text: d.text, lang: d.lang?.primary_lang });
@@ -166,13 +191,12 @@ ws.addEventListener("message", (ev) => {
       _draftingNode = null;
       _draftBody = null;
       break;
+    }
     case "error":
       addMessage({ who: "system", text: `error · ${msg.message}` });
       break;
   }
 });
-
-let _draftingNode = null;  // the message element currently being streamed into
 
 // --- input ----------------------------------------------------------------
 input.addEventListener("keydown", (ev) => {

@@ -16,17 +16,19 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import structlog
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from smcity import __version__
 from smcity.llm import ping
 from smcity.orchestrator import Orchestrator, TurnEvent
+from smcity.ratelimit import RateLimiter
 from smcity.schemas import Health, TurnRequest, TurnResponse
-from smcity.session import SessionStore
+from smcity.session import SessionStore, is_valid_session_id
 from smcity.settings import get_settings
 
 log = structlog.get_logger("smcity")
@@ -54,9 +56,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     s = get_settings()
     DEFAULT_DB.parent.mkdir(parents=True, exist_ok=True)
     store = SessionStore(DEFAULT_DB)
+    limiter = RateLimiter(rate_per_min=s.rate_per_min, burst=s.rate_burst)
     orchestrator = Orchestrator(store)
     app.state.store = store
     app.state.orchestrator = orchestrator
+    app.state.limiter = limiter
     log.info("startup", base_url=s.llm_base_url, model=s.llm_model, version=__version__)
     yield
     log.info("shutdown")
@@ -88,6 +92,14 @@ async def health() -> Health:
 
 @app.post("/turn", response_model=TurnResponse)
 async def turn(req: TurnRequest) -> TurnResponse:
+    limiter: RateLimiter = app.state.limiter
+    wait_s = await limiter.acquire(req.session_id)
+    if wait_s > 0:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"rate limit exceeded; retry in {wait_s:.1f}s",
+            headers={"Retry-After": f"{max(1, int(wait_s + 0.5))}"},
+        )
     orchestrator: Orchestrator = app.state.orchestrator
     return await orchestrator.handle_turn(req)
 
@@ -95,10 +107,61 @@ async def turn(req: TurnRequest) -> TurnResponse:
 # ---- WebSocket -----------------------------------------------------------
 
 
+def _origin_host(origin: str) -> str:
+    """Extract `host[:port]` from an Origin header (or return the string as-is
+    when parsing fails). Used for the allow-list comparison."""
+    if not origin:
+        return ""
+    try:
+        parts = urlsplit(origin)
+    except ValueError:
+        return origin
+    return parts.netloc or origin
+
+
+def _allowed_origin(origin: str, host_header: str) -> bool:
+    """Return True when the WebSocket upgrade is allowed.
+
+    Rules:
+    - `ws_allowed_origins == "*"` → always allow.
+    - empty origin (e.g. a direct curl / wscat that omits the header) is
+      allowed on the tailnet posture; attackers have to run a real browser
+      to exploit an origin-less request and the server isn't exposed to one.
+    - non-empty origin must match the Host header (same-origin) OR be in
+      the configured comma-separated allow-list.
+    """
+    s = get_settings()
+    allow = [tok.strip() for tok in s.ws_allowed_origins.split(",") if tok.strip()]
+    if "*" in allow:
+        return True
+    if not origin:
+        return True
+    origin_host = _origin_host(origin)
+    if host_header and origin_host == host_header:
+        return True
+    for entry in allow:
+        if "://" in entry:
+            if origin == entry.rstrip("/"):
+                return True
+        elif origin_host == entry:
+            return True
+    return False
+
+
 @app.websocket("/ws/{session_id}")
 async def ws(session_id: str, websocket: WebSocket) -> None:
+    if not is_valid_session_id(session_id):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="invalid session_id")
+        return
+    origin = websocket.headers.get("origin", "")
+    host_header = websocket.headers.get("host", "")
+    if not _allowed_origin(origin, host_header):
+        log.warning("ws_origin_denied", origin=origin, host=host_header, session=session_id)
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="origin not allowed")
+        return
     await websocket.accept()
     orchestrator: Orchestrator = app.state.orchestrator
+    limiter: RateLimiter = app.state.limiter
     await websocket.send_json(
         {
             "type": "ready",
@@ -119,6 +182,16 @@ async def ws(session_id: str, websocket: WebSocket) -> None:
                 )
                 continue
             if kind == "turn":
+                wait_s = await limiter.acquire(session_id)
+                if wait_s > 0:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": f"rate limit exceeded; retry in {wait_s:.1f}s",
+                            "retry_after_s": round(wait_s, 2),
+                        }
+                    )
+                    continue
                 req = TurnRequest.model_validate(
                     {
                         "session_id": session_id,

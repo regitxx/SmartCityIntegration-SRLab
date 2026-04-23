@@ -1,6 +1,6 @@
 # Deployment — Tailscale Serve
 
-**Version:** v0.1.0 · 2026-04-21
+**Version:** v0.3.1 · 2026-04-23
 **Default posture:** Tailscale-only, no public Funnel, no PII persistence.
 
 ---
@@ -34,6 +34,14 @@ Verify LM Studio is up:
 ```bash
 curl -sS http://earnests-mac-studio.taila366aa.ts.net:1234/v1/models
 ```
+
+### Recommended LM Studio tuning
+
+These are set in the LM Studio UI (Chat or Server tab → model gear ⚙️). None require code changes.
+
+- **Speculative decoding.** Pair `gpt-oss-120b` with `gpt-oss-20b` as the draft model. Expected saving: ~300–800 ms per synthesis hop on the Mac Studio. Covered in `docs/audit/03_enhancements.md` §1.
+- **Flash attention.** Enable on Metal; LM Studio 0.3+ supports it for `gpt-oss-*`. Drops first-token latency by 10–20 % on our workload.
+- **Keep model loaded.** Set "Keep model loaded after request" so the KV cache isn't evicted between idle turns. The agent passes `user=session_id` on every call, which llama.cpp / LM Studio routes to a per-slot KV cache.
 
 ## Install + run
 
@@ -107,11 +115,18 @@ Before enabling:
 | Excessive resource use from any one session | KMB stop catalog fetched once per process; per-tool TTL cache; per-request timeouts on every upstream HTTP call. |
 | Public exposure of the LLM to the internet | Default to Tailscale-only; Funnel is opt-in. |
 
-### Out of scope for v0.1
+### Hardened in v0.3.1 (was out of scope for v0.1)
+
+- **WebSocket origin allow-list.** `/ws/{session_id}` rejects cross-origin upgrades unless the Origin matches the Host header or is listed in `WS_ALLOWED_ORIGINS`. Set `WS_ALLOWED_ORIGINS=*` to disable (not recommended off-tailnet).
+- **Per-session rate limit.** Token-bucket in `smcity.ratelimit`: `RATE_PER_MIN=30` refill + `RATE_BURST=10` by default. The WS path returns `{"type":"error"}` with `retry_after_s`; the HTTP path returns `429` with `Retry-After`.
+- **`session_id` regex guard.** `^[A-Za-z0-9_.-]{1,64}$` — enforced on WebSocket connect, in the `TurnRequest` pydantic model, and at every SQLite read/write.
+- **SQLite file perms.** `data/sessions.sqlite3` (and its `-wal`/`-shm`/`-journal` shards) are `chmod 600` on creation.
+- **Structured tool dispatch log.** Every tool call emits a `tool_call` structlog record with `name`, `status`, `latency_ms`, `cached`, `session_id`. Pipe stdout to your preferred ingest.
+
+### Out of scope
 
 - **Multi-tenant auth.** There is no user model; the service assumes the tailnet itself is the trust boundary.
-- **Rate limiting.** No per-session or per-IP rate limiter. Add a `slowapi` middleware when Funnel is enabled.
-- **Structured audit log.** The tool-trace is kept per-response but not persisted to a tamper-evident log.
+- **Tamper-evident audit log.** The tool-trace is emitted via structlog but not signed / persisted durably.
 - **TLS pinning** for data.gov.hk upstreams. We trust OS certificate store.
 
 ### Things we explicitly don't do

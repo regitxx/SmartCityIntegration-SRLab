@@ -2,6 +2,44 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.3.1] — 2026-04-23
+
+Executes the **"this week"** + **"this milestone"** clusters from `docs/AUDIT.md`. Zero behavioural changes on the happy path; every change is hardening, latency-preserving, or test coverage.
+
+### Security (P1 hardening)
+
+- **WebSocket origin allow-list (P1-1).** `/ws/{session_id}` now rejects cross-origin upgrades. Defaults to same-origin + missing-Origin (tailnet posture). Configurable via `WS_ALLOWED_ORIGINS` env (`*` to disable, `host:port` or `scheme://host` entries).
+- **Per-session rate limit (P1-2).** Token-bucket in `smcity.ratelimit` — defaults: 30 tokens/min refill, burst 10. WS emits `{"type":"error","retry_after_s":N}`; HTTP returns 429 with `Retry-After`.
+- **`session_id` regex guard (P1-3).** `^[A-Za-z0-9_.-]{1,64}$` — enforced at the WebSocket handler, in `TurnRequest` pydantic model, and inside `SessionStore.load/save/forget`.
+- **Harmony-leak extractor regression tests (P1-4).** `tests/test_harmony_injection.py` covers user-echoed tool names in prose, array-not-object arg guard, prose-brace overshoot, and mixed canonical+bare leaks.
+
+### Correctness + latency (P2)
+
+- **TTL cache enforcement (P2-1).** `ToolRegistry.dispatch()` now honours `ttl_seconds` + `cacheable` on the spec; repeat `(name, args)` calls return `cached=True` without re-running the handler.
+- **Structured audit log (P2-5).** Every tool dispatch emits a `tool_call` structlog record with `name`, `status`, `latency_ms`, `cached`, `session_id`.
+- **`web/app.js` textContent migration (P2-6).** All dynamic HTML replaced with DOM-builder + textContent. No innerHTML with runtime data anywhere in the UI.
+- **SQLite file perms.** `data/sessions.sqlite3` (+ WAL/SHM/journal shards) are `chmod 600` on creation.
+- **Prompt-prefix stability.** `ToolRegistry.openai_schemas()` returns alphabetised order and is pinned by `tests/test_prompt_prefix_stability.py` (byte-identical across rebuilds — keeps the LM Studio KV cache warm).
+- **`smcity/geometry.py`.** Centralised `haversine_m` / `haversine_km`; 5 inline copies deduped from facility / housing / transport_search / transport_simple_modes / transport_planner.
+
+### CI
+
+- **`pip-audit --strict`** job added to `.github/workflows/check.yml`, scanning the exported uv lockfile.
+- **`osv-scanner`** job scanning `uv.lock` for known vulnerabilities.
+
+### Docs
+
+- `docs/DEPLOY.md` — new "Recommended LM Studio tuning" section (speculative decoding with `gpt-oss-20b` draft, Flash attention, keep-model-loaded), expanded threat model with v0.3.1 mitigations.
+
+### Tests
+
+- `tests/test_harmony_injection.py` — 5 regression tests for P1-4.
+- `tests/test_prompt_prefix_stability.py` — 3 tests pinning tool-schema order.
+- `tests/test_ratelimit.py` — 4 tests for the token bucket.
+- `tests/test_tool_cache.py` — 6 tests for TTL cache behaviour.
+- `tests/test_ws_origin.py` — 7 tests for origin allow-list + session_id guard.
+- **189 unit tests green**, ruff + format + mypy strict clean across 57 source files.
+
 ## [0.3.0] — 2026-04-21
 
 Aligns the tool registry with the lab's `3 - Selected Smart City Data Maps.xlsx` workbook. **30 of 35 workbook datasets are now served by live APIs** (all 27 POI categories + all 3 road-facility categories). See `docs/DATASETS.md` for the per-ID coverage map.
