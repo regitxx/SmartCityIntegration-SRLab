@@ -12,6 +12,7 @@ from smcity.tools.geo import ADDRESS_LOOKUP_TOOL
 from smcity.tools.housing import GET_ESTATE_INFO_TOOL, LIST_ESTATES_TOOL
 from smcity.tools.meta import ASK_USER_TOOL, FORGET_ME_TOOL, WHAT_LANGUAGES_TOOL
 from smcity.tools.osm_pois import SEARCH_OSM_POIS_TOOL
+from smcity.tools.otp2 import PLAN_MULTIMODAL_JOURNEY_TOOL
 from smcity.tools.registry import ToolError, ToolRegistry, ToolResult, ToolSpec
 from smcity.tools.transport import MTR_NEXT_TRAINS_TOOL
 from smcity.tools.transport_citybus import CITYBUS_ETA_TOOL, CITYBUS_ROUTE_STOPS_TOOL
@@ -48,6 +49,7 @@ def build_default_registry() -> ToolRegistry:
         PLAN_WALKING_TOOL,
         PLAN_TAXI_TOOL,
         PLAN_JOURNEY_TOOL,
+        PLAN_MULTIMODAL_JOURNEY_TOOL,
         # context
         CURRENT_WEATHER_TOOL,
         ACTIVE_WARNINGS_TOOL,

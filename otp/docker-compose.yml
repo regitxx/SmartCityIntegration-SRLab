@@ -1,0 +1,37 @@
+# OpenTripPlanner 2 sidecar for smcity multimodal journey planning.
+#
+# Usage:
+#   cd otp/
+#   # 1. place HK GTFS zips + osm.pbf in ./data/ (see README.md)
+#   # 2. build the graph once:
+#   docker compose run --rm otp2 --build --save
+#   # 3. start the server:
+#   docker compose up -d
+#
+# The smcity agent hits http://127.0.0.1:8080/otp via OTP2_BASE_URL.
+# Pin the image to a specific version — OTP ships breaking changes
+# between minor releases and we want reproducible graphs.
+
+services:
+  otp2:
+    image: opentripplanner/opentripplanner:2.6.0
+    container_name: smcity-otp2
+    # OTP2 takes ~3-6 GB heap for a HK-size graph — size accordingly.
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx4g -XX:+UseG1GC"
+    ports:
+      - "127.0.0.1:8080:8080"  # bind to loopback; agent is same host or tailnet
+    volumes:
+      - ./data:/var/opentripplanner:rw
+    # Default: serve the pre-built graph. For graph-building, override with:
+    #   docker compose run --rm otp2 --build --save
+    command: ["--load", "--serve"]
+    restart: unless-stopped
+    # Health check: the router info endpoint returns 200 when the graph
+    # is loaded. Gives us a clean way to know when OTP is ready.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/otp/routers/default || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s

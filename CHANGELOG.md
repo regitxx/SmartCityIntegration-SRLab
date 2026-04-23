@@ -2,6 +2,52 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.4] — 2026-04-23
+
+**OpenTripPlanner 2 sidecar scaffold** — true multimodal journey planning (walk + bus + MTR + minibus + ferry) via an OTP2 HTTP sidecar running in Docker. The hand-rolled Dijkstra MTR-only planner stays as the fast path / fallback.
+
+### New: `smcity/tools/otp2.py`
+
+- `transport.plan_multimodal_journey(origin_lat, origin_lng, destination_lat, destination_lng, modes, date, time, arrive_by, num_itineraries)` — thin async client over OTP2's `/otp/routers/default/plan` REST endpoint.
+- Accepts either OTP2 uppercase mode names (`TRANSIT`, `BUS`, `RAIL`, `SUBWAY`, `FERRY`, `WALK`) or lowercase aliases. Deduplicates.
+- Normalises OTP2's leg shape into `PlanLeg(mode, route_short_name, route_long_name, agency_name, from_stop, to_stop, start_time, end_time, duration_s, distance_m)` so the LLM sees the same leg model our simple planner uses.
+- Graceful degradation: when the sidecar is unreachable, raises `ToolUpstreamError` with a hint pointing at `otp/README.md`. The agent falls back to `transport.plan_simple_route`.
+- Env-driven config: `OTP2_BASE_URL`, `OTP2_ROUTER`, `OTP2_TIMEOUT_S`.
+
+### New: `otp/docker-compose.yml` + `otp/README.md`
+
+- Pinned to `opentripplanner/opentripplanner:2.6.0` (breaking-change-averse).
+- Binds `127.0.0.1:8080` by default (loopback-only; agent hits it locally).
+- 4 GB heap via `JAVA_TOOL_OPTIONS=-Xmx4g`.
+- Healthcheck via `/otp/routers/default`.
+- README covers: collecting GTFS inputs (MTR, KMB, Citybus, GMB), OSM extract sources (bbbike HK is ~60 MB, Geofabrik china is 1+ GB), a minimal `build-config.json`, the graph-build one-liner, startup, and smoke-test script. Also lists known limitations (no fare prediction, GMB live ETA separate, cross-harbour ferry depends on feed).
+
+### `.gitignore`
+
+`otp/data/` is gitignored — it's docker-compose's mount point for the graph + GTFS/OSM inputs (~4 GB), not source.
+
+### What you still need to do manually
+
+1. Install Docker.
+2. Drop HK GTFS zips + `hong-kong.osm.pbf` into `otp/data/`.
+3. `cd otp && docker compose run --rm otp2 --build --save` (~15–30 min on an M-series Mac).
+4. `docker compose up -d`.
+5. The agent picks it up automatically.
+
+### Tests (6 new, CI-safe)
+
+- `test_mode_mapping_lowercase_aliases_to_uppercase` — mode alias + dedup logic.
+- `test_tool_registered_in_default_registry` — pins the new tool name.
+- `test_otp2_happy_path_parses_itineraries` — 3-leg walk-subway-walk plan, verifies mode + route + agency extraction.
+- `test_otp2_connection_refused_surfaces_clean_upstream_error` — sidecar-down path carries the helpful hint.
+- `test_otp2_planner_error_payload_surfaces_msg` — OTP's in-payload error envelope is lifted into the tool error.
+- `test_otp2_empty_itineraries_surface_helpful_note` — graph-bounds miss returns an empty itinerary list with a diagnostic note.
+
+Every HTTP call is respx-mocked — no Java / Docker / sidecar required for CI. The live integration is what `otp/README.md`'s smoke-test script covers.
+
+- **232 tests green** (was 226), ruff + format + mypy strict clean across 76 source files.
+- Registry now ships **27 tools** (was 26).
+
 ## [0.4.3] — 2026-04-23
 
 **WebSocket streaming fuzz runner** — the fuzzer now exercises the same code path the production UI uses (`/ws/{session_id}` streaming) and captures user-perceived latency metrics the HTTP path can't measure.

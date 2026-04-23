@@ -43,10 +43,8 @@ traces/
 ~$*
 # Office lock files (~$filename.xlsx etc.)
 
-# OpenTripPlanner / Valhalla runtime
-otp/graph.obj
-otp/*.gtfs.zip
-otp/*.osm.pbf
+# OpenTripPlanner / Valhalla runtime (docker-compose mounts otp/data/)
+otp/data/
 valhalla/tiles/
 
 # Langfuse / observability local
