@@ -2,6 +2,41 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.3] — 2026-04-23
+
+**WebSocket streaming fuzz runner** — the fuzzer now exercises the same code path the production UI uses (`/ws/{session_id}` streaming) and captures user-perceived latency metrics the HTTP path can't measure.
+
+### New: `smcity_fuzz/ws_transport.py` + `--mode ws` flag
+
+- `drive_turn_via_ws(question, session_id, settings, connect=None)` — opens a fresh WebSocket per turn, sends the `turn` frame, drains `turn.start` / `tool_call.*` / `turn.token` / `turn.final` events, and aggregates them.
+- Injectable `connect` param lets unit tests substitute an in-memory fake — no real WS server needed for CI.
+- Uses the `websockets` library that was already pulled in by `uvicorn[standard]` — no new dependency.
+
+### New fields on `FuzzRow`
+
+- `transport: "http" | "ws"` — which code path this turn exercised.
+- `ttft_ms: int | None` — time from `turn.start` → first `turn.token` event. The user-perceived latency number p50 targets care about.
+- `token_count: int | None` — how many incremental tokens the UI would have rendered; `0` signals the agent short-circuited (fast-path chitchat or error before synthesis).
+
+Defaults preserve the old JSONL schema: existing rows read back with `transport="http"` and `ttft_ms=None`.
+
+### CLI
+
+```
+uv run python -m smcity_fuzz run --mode ws --turns 20
+```
+
+`--mode http` (default) keeps the original POST `/turn` path for quick campaigns where only total latency matters.
+
+### Tests (6 new)
+
+- `test_ws_url_upgrades_scheme` — http/https → ws/wss path prefix.
+- `test_ws_transport_captures_ttft_and_tokens` — scripted 3-token stream yields positive TTFT + correct token count.
+- `test_ws_transport_fast_path_without_tokens_falls_back_to_final_text` — chitchat (0 tokens) still produces a reply from `turn.final`, TTFT stays `None`.
+- `test_ws_transport_raises_on_error_frame` — a rate-limit error frame surfaces as `WsTransportError` (not a crash).
+- `test_runner_ws_mode_populates_ttft_and_token_count` — full runner integration in ws mode; row persisted with new fields.
+- 226 tests green (was 221), ruff + format + mypy strict clean across 74 source files.
+
 ## [0.4.2] — 2026-04-23
 
 **HKHA live + EPD AQHI regression fix.** End-to-end "check if all works" pass — **14/14 tools pass live**.

@@ -73,6 +73,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         languages=languages,
         max_turns=args.turns,
         settings=settings,
+        mode=args.mode,
     )
     print(f"run_id: {run_id}")
     print(summarise(rows, max_failures_shown=args.show))
@@ -156,6 +157,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="comma-separated language codes (yue, en, zho-Hant, zho-Hans)",
     )
     p_run.add_argument("--show", type=int, default=15, help="top-N failures to print")
+    p_run.add_argument(
+        "--mode",
+        choices=("http", "ws"),
+        default="http",
+        help=(
+            "transport: 'http' (POST /turn, total-latency only) or 'ws' "
+            "(WebSocket /ws/:session_id, captures TTFT + token count). "
+            "Default http."
+        ),
+    )
 
     p_report = sub.add_parser("report", help="Summarise a past campaign")
     p_report.add_argument("--run-id", type=str, default=None)

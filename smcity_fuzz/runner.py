@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -30,6 +30,9 @@ from smcity_fuzz.personas import PERSONAS, LanguageCode, Persona
 from smcity_fuzz.settings import FuzzSettings, get_fuzz_settings
 from smcity_fuzz.store import FuzzRow, append_row, iso_now
 from smcity_fuzz.synth import SynthError, synthesise_question
+from smcity_fuzz.ws_transport import WsTransportError, drive_turn_via_ws
+
+TransportMode = Literal["http", "ws"]
 
 
 def _new_run_id() -> str:
@@ -76,6 +79,9 @@ async def _one_turn(
     agent_client: httpx.AsyncClient,
     s: FuzzSettings,
     sem: asyncio.Semaphore,
+    *,
+    mode: TransportMode = "http",
+    ws_connect: Any = None,
 ) -> FuzzRow:
     async with sem:
         row = FuzzRow(
@@ -85,6 +91,7 @@ async def _one_turn(
             language=language,
             topic=topic.id,
             question="",
+            transport=mode,
         )
 
         # --- synth ------------------------------------------------------
@@ -101,15 +108,34 @@ async def _one_turn(
         # Give each turn a unique session so sessions never accumulate
         # cross-turn state or trigger the rate limiter under concurrency.
         session_id = f"fuzz-{run_id[-8:]}-{secrets.token_hex(4)}"
-        try:
-            reply, trace, elapsed = await _call_agent(row.question, session_id, agent_client, s)
-            row.reply = reply
-            row.tool_trace = trace
-            row.elapsed_ms = elapsed
-        except httpx.HTTPError as err:
-            row.errors.append(f"agent_http:{err}")
-            append_row(row, settings=s)
-            return row
+        reply = ""
+        trace: list[dict[str, Any]] = []
+        if mode == "ws":
+            try:
+                ws_result = await drive_turn_via_ws(
+                    row.question, session_id, settings=s, connect=ws_connect
+                )
+                reply = ws_result.reply
+                trace = ws_result.tool_trace
+                row.reply = reply
+                row.tool_trace = trace
+                row.elapsed_ms = ws_result.elapsed_ms
+                row.ttft_ms = ws_result.ttft_ms
+                row.token_count = ws_result.token_count
+            except WsTransportError as err:
+                row.errors.append(f"agent_ws:{err}")
+                append_row(row, settings=s)
+                return row
+        else:
+            try:
+                reply, trace, elapsed = await _call_agent(row.question, session_id, agent_client, s)
+                row.reply = reply
+                row.tool_trace = trace
+                row.elapsed_ms = elapsed
+            except httpx.HTTPError as err:
+                row.errors.append(f"agent_http:{err}")
+                append_row(row, settings=s)
+                return row
 
         # --- judge -------------------------------------------------------
         try:
@@ -132,8 +158,14 @@ async def run_campaign(
     settings: FuzzSettings | None = None,
     synth_client: httpx.AsyncClient | None = None,
     agent_client: httpx.AsyncClient | None = None,
+    mode: TransportMode = "http",
+    ws_connect: Any = None,
 ) -> tuple[str, list[FuzzRow]]:
-    """Run a fuzz campaign; return (run_id, rows)."""
+    """Run a fuzz campaign; return (run_id, rows).
+
+    `mode="ws"` drives every turn via the WebSocket `/ws/{session_id}`
+    streaming endpoint and captures TTFT + token count on each row.
+    """
     s = settings or get_fuzz_settings()
     run_id = _new_run_id()
     sem = asyncio.Semaphore(s.concurrency)
@@ -147,7 +179,10 @@ async def run_campaign(
         cells = list(_matrix(personas, topics, languages))
         if max_turns is not None:
             cells = cells[:max_turns]
-        coros = [_one_turn(p, t, lang, run_id, sc, ac, s, sem) for p, t, lang in cells]
+        coros = [
+            _one_turn(p, t, lang, run_id, sc, ac, s, sem, mode=mode, ws_connect=ws_connect)
+            for p, t, lang in cells
+        ]
         rows = await asyncio.gather(*coros)
     finally:
         if owns_synth:

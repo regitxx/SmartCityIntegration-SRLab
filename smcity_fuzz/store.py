@@ -31,6 +31,13 @@ class FuzzRow(BaseModel):
     reply: str | None = None
     tool_trace: list[dict[str, Any]] = Field(default_factory=list)
     elapsed_ms: int | None = None
+    # Transport: "http" (POST /turn) or "ws" (streaming /ws/{session_id}).
+    # Populated by the runner; default http for backward compat with
+    # existing JSONL rows.
+    transport: str = "http"
+    # Streaming-mode timing fields; only populated when transport == "ws".
+    ttft_ms: int | None = None  # time-to-first-token from turn.start → first turn.token
+    token_count: int | None = None  # how many incremental tokens the UI would render
     judge: JudgeVerdict | None = None
     errors: list[str] = Field(default_factory=list)
 
