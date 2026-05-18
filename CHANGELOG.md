@@ -2,6 +2,51 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.9] — 2026-05-19
+
+**Fixes a real hallucination spotted live by the boss.** "I'm in PolyU how do I get to CityU?" produced a confidently-stated but fictional MTR route ("Tsuen Wan line to Mong Kok, change to Kwun Tong line at Yau Ma Tei, get off at Kowloon Tong") — none of which are correct. The real path is Hung Hom → East Rail Line → Kowloon Tong, 2 stops, 4 min.
+
+### Root cause
+
+`transport.plan_journey` deliberately returned `mtr.duration_min = null` with a `note: "Call transport.plan_simple_route for an accurate MTR leg-by-leg plan…"` — relying on the LLM to make a second tool call. gpt-oss-120b ignored that instruction and made up a plausible-sounding route. The follow-up-call design was a footgun: structured data > LLM-follow-through every time.
+
+### Fix
+
+`plan_journey` now CALLS `plan_simple_route` internally and ships the real Dijkstra-computed MTR leg inline as structured fields the LLM cannot misread:
+
+```
+JourneyOption(
+  mode="mtr",
+  duration_min=<real>,
+  mtr_origin_station="Hung Hom",
+  mtr_destination_station="Kowloon Tong",
+  mtr_lines=["East Rail Line"],
+  mtr_legs_summary="MTR: walk to Hung Hom, take the East Rail Line to Kowloon Tong, ~4 min total.",
+)
+```
+
+`_inline_mtr_leg()` handles the call, with graceful degradation if the planner returns an error or the pair is too close together (sub-600m → suggest walking).
+
+### Verification (live, via gpt-oss-120b on Mac Studio, through public Funnel URL)
+
+```
+Q: Im in polyu how do I get to cityu
+A: | Mode | Time | Cost |
+   | Walk | ~53 min (~3.8 km) | free |
+   | MTR  | ~4 min total – walk to Hung Hom station, take the
+            East Rail Line to Kowloon Tong | ~HK$5–7 |
+   | Taxi | ~12 min (~5 km) | HK$56–69 |
+
+   The MTR is the fastest and cheapest option.
+
+elapsed: 7s · tool result contained the real route, LLM quoted it verbatim.
+```
+
+### Gate
+
+- 253 unit + 7 integration tests green
+- ruff + format + mypy strict clean across 77 source files
+
 ## [0.4.8] — 2026-05-19
 
 **Critical bug fix.** ALS (Lands Department Address Lookup Service) was silently returning 0 candidates for every query since v0.1.0 — the parser assumed a GeoJSON `features[]` shape, but ALS actually returns `SuggestedAddress[]` with nested `Address.PremisesAddress.GeospatialInformation.{Latitude,Longitude}`. This single bug broke `geo.address_lookup` and every journey-planning tool that called `_geocode_one`. Hero scenarios like "How do I get from Kowloon Tong to Hung Hom?" were unanswerable.

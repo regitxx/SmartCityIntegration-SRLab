@@ -9,7 +9,7 @@ composes them for "any mode" queries.
 from __future__ import annotations
 
 import math
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 from pydantic import BaseModel, Field
@@ -355,6 +355,12 @@ class JourneyOption(BaseModel):
     duration_min: int | None = None
     fare_hkd_range: tuple[int, int] | None = None
     note: str | None = None
+    # MTR-only fields, populated by an internal plan_simple_route call so the
+    # LLM never has to make a follow-up call (which it would hallucinate past).
+    mtr_origin_station: str | None = None  # e.g. "Hung Hom"
+    mtr_destination_station: str | None = None  # e.g. "Kowloon Tong"
+    mtr_lines: list[str] | None = None  # e.g. ["East Rail Line"]
+    mtr_legs_summary: str | None = None  # one-liner the LLM can paste verbatim
 
 
 class PlanJourneyResult(BaseModel):
@@ -388,16 +394,10 @@ async def _journey_handler(args: PlanJourneyArgs, ctx: ToolContext) -> PlanJourn
         )
 
     if "mtr" in modes:
-        # Pick a coarse MTR estimate from nearest-station + straight-line; the
-        # full Dijkstra path is available via transport.plan_simple_route.
-        mtr_note = _mtr_summary_note(o_lat, o_lng, d_lat, d_lng)
-        options.append(
-            JourneyOption(
-                mode="mtr",
-                duration_min=None,  # delegated — LLM should call plan_simple_route
-                note=mtr_note,
-            )
-        )
+        # Inline the actual Dijkstra plan so the LLM never has to make a
+        # follow-up call (it hallucinates a fake route when asked to).
+        mtr_option = await _inline_mtr_leg(o_lat, o_lng, d_lat, d_lng)
+        options.append(mtr_option)
 
     if "taxi" in modes:
         minutes = max(3, round(road_m / (_DRIVE_SPEED_KPH * 1000 / 60)))
@@ -442,17 +442,90 @@ def _recommendation(dist_m: float) -> str:
     return "taxi"
 
 
-def _mtr_summary_note(o_lat: float, o_lng: float, d_lat: float, d_lng: float) -> str:
-    # Straight-line distance to a rough MTR estimate (real routing is
-    # transport.plan_simple_route). Just a hint for the LLM to know it's an
-    # option.
+async def _inline_mtr_leg(
+    o_lat: float, o_lng: float, d_lat: float, d_lng: float
+) -> JourneyOption:
+    """Run the real Dijkstra MTR planner and embed the result as a JourneyOption.
+
+    Earlier versions returned `mode=mtr, note='Call plan_simple_route'` and
+    relied on the LLM to make a follow-up call. In practice gpt-oss-120b
+    ignored that and fabricated routes (e.g. "Tsuen Wan line via Yau Ma Tei"
+    when the real path was East Rail Line, 2 stops). Solving by inlining
+    the real plan so the LLM has actual data in its context.
+    """
+    # Local import to avoid circular import at module load.
+    from smcity.tools.registry import ToolContext
+    from smcity.tools.transport_planner import PlanSimpleRouteArgs
+    from smcity.tools.transport_planner import _handler as _plan_handler
+
     dist_km = _haversine_m(o_lat, o_lng, d_lat, d_lng) / 1000
     if dist_km < 0.6:
-        return "MTR possible but walking is likely faster (stations are sparse)."
-    return (
-        "Call transport.plan_simple_route for an accurate MTR leg-by-leg plan "
-        "between the nearest stations."
+        return JourneyOption(
+            mode="mtr",
+            duration_min=None,
+            note="MTR possible but walking is likely faster (stations are sparse).",
+        )
+
+    args = PlanSimpleRouteArgs(
+        origin_lat=o_lat,
+        origin_lng=o_lng,
+        destination_lat=d_lat,
+        destination_lng=d_lng,
     )
+    try:
+        plan = await _plan_handler(args, ToolContext(session_id="_journey_inline"))
+    except Exception:
+        return JourneyOption(
+            mode="mtr",
+            duration_min=None,
+            note="MTR routing unavailable for this pair; consider taxi or walk.",
+        )
+
+    if not plan.ok or plan.total_duration_min is None:
+        return JourneyOption(
+            mode="mtr",
+            duration_min=None,
+            note=plan.reason or "No MTR route found between the nearest stations.",
+        )
+
+    # Origin / destination station NAMES (not codes) — what the LLM should quote.
+    origin_st = _first_named_station(plan.legs, side="from")
+    dest_st = _first_named_station(plan.legs, side="to", reverse=True)
+    lines_en: list[str] = []
+    for leg in plan.legs:
+        if leg.kind == "ride" and leg.line_name_en and leg.line_name_en not in lines_en:
+            lines_en.append(leg.line_name_en)
+
+    # Build a verbatim-paste-able one-liner. The prompt tells the LLM to use this.
+    if origin_st and dest_st and lines_en:
+        lines_str = " + ".join(lines_en)
+        summary = (
+            f"MTR: walk to {origin_st}, take the {lines_str} to {dest_st}, "
+            f"~{plan.total_duration_min} min total."
+        )
+    else:
+        summary = f"~{plan.total_duration_min} min on the MTR."
+
+    return JourneyOption(
+        mode="mtr",
+        duration_min=plan.total_duration_min,
+        note=summary,
+        mtr_origin_station=origin_st,
+        mtr_destination_station=dest_st,
+        mtr_lines=lines_en or None,
+        mtr_legs_summary=summary,
+    )
+
+
+def _first_named_station(legs: list[Any], *, side: str, reverse: bool = False) -> str | None:
+    """Pick a human-readable station name from the planner's legs list."""
+    iterable = reversed(legs) if reverse else legs
+    for leg in iterable:
+        key = f"{side}_name_en"
+        name = getattr(leg, key, None)
+        if name:
+            return str(name)
+    return None
 
 
 PLAN_JOURNEY_TOOL: ToolSpec[PlanJourneyArgs, PlanJourneyResult] = ToolSpec(
