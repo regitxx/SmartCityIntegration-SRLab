@@ -518,13 +518,32 @@ async def _inline_mtr_leg(
 
 
 def _first_named_station(legs: list[Any], *, side: str, reverse: bool = False) -> str | None:
-    """Pick a human-readable station name from the planner's legs list."""
+    """Pick a real transit-station name from the planner's legs list.
+
+    The Dijkstra planner emits a sequence like
+        walk('(origin)' → Yau Ma Tei) · board(Yau Ma Tei) · ride(YMT→Central) ·
+        alight(Central) · walk(Central → '(destination)')
+    when origin/destination are arbitrary coords. The walk legs carry literal
+    placeholder strings like "(origin)" / "(destination)" in their from/to
+    fields. We must SKIP those and return the first/last station that's
+    actually on the MTR network — i.e. the `from`/`to` of a board / ride /
+    alight leg, which is always a real station name.
+    """
     iterable = reversed(legs) if reverse else legs
+    key = f"{side}_name_en"
     for leg in iterable:
-        key = f"{side}_name_en"
+        kind = getattr(leg, "kind", None)
+        # Skip the walk-to-station and walk-from-station bookends.
+        if kind == "walk":
+            continue
         name = getattr(leg, key, None)
-        if name:
-            return str(name)
+        if not name:
+            continue
+        # Defensive: any literal placeholder slipped through? Drop it.
+        s = str(name).strip()
+        if s.startswith("(") and s.endswith(")"):
+            continue
+        return s
     return None
 
 

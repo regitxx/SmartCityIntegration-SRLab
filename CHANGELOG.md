@@ -2,6 +2,48 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.10] — 2026-05-19
+
+**Three bugs the boss caught in 30 seconds of live testing. All fixed.**
+
+### Bug 1 — `_first_named_station` picked the wrong leg ("(origin)" placeholder)
+
+For "Kwong Fai Mansion → Central" the agent said "walk to **the nearest MTR station**" because `plan_journey.options[mtr].mtr_origin_station` was literally the string `"(origin)"`. v0.4.9's helper grabbed the first leg's `from_name_en`, but the first leg is `walk('(origin)' → Yau Ma Tei)`, not a transit leg. Fixed by filtering out `walk` legs in `_first_named_station` and defensively dropping any `(...)` placeholders. Tool now correctly returns `mtr_origin_station = "Yau Ma Tei"`.
+
+### Bug 2 — cost/distance noise overwhelmed the directions
+
+Previous prompt told the LLM to "present all three modes side-by-side" with a table including HK$ ranges and km distances. User feedback: "I don't need this price I don't need ny bullshit for now I just need right directions". New travel-reply rule in `SYSTEM_PROMPT`: directions-first paragraph, name the station and line, quote `mtr_legs_summary` verbatim, **mention walk/taxi as one short fallback sentence**. Tables only on explicit request ("compare options" / "show all modes").
+
+Before:
+```
+| Mode | Distance | Time | Cost |
+| Walk | 3.8 km   | 53m  | –    |
+| MTR* | –        | 4m   | HK$4-6 |
+| Taxi | 5 km     | 12m  | HK$56-69 |
+*MTR: Walk to Hung Hom...
+```
+
+After:
+```
+Take the MTR: walk to Hung Hom station, board the East Rail Line
+and get off at Kowloon Tong — about 4 minutes total.
+
+If you prefer, it's a ~53-minute walk (~3.8 km) or a taxi ride
+(~12 min, HK$56-69).
+```
+
+### Bug 3 — UI streamed bare-leak tool calls verbatim before cleanup could strip them
+
+User's third turn ("walk to what mtr?") showed `transport.plan_journey json{...}` as visible chat text. The streaming path in `chat_stream` swallows `<|`-prefixed harmony tokens but NOT bare-leak `tool.name json{...}` patterns. Those got streamed to the UI bubble token-by-token. Then `turn.final` arrived with cleaned text but `web/app.js` only swapped the bubble text **if it was empty** — so the dirty streamed text remained.
+
+Fixed in `web/app.js`: on every `turn.final`, ALWAYS overwrite the bubble with the server's final cleaned text (it has been through `extract_harmony_tool_calls` + `_rewrite_source_footer`). The server-side cleanup is the source of truth.
+
+### Gate
+
+- 253 unit + 7 integration tests green
+- ruff + format + mypy strict clean across 77 source files
+- Live verified end-to-end against gpt-oss-120b through the public Funnel URL
+
 ## [0.4.9] — 2026-05-19
 
 **Fixes a real hallucination spotted live by the boss.** "I'm in PolyU how do I get to CityU?" produced a confidently-stated but fictional MTR route ("Tsuen Wan line to Mong Kok, change to Kwun Tong line at Yau Ma Tei, get off at Kowloon Tong") — none of which are correct. The real path is Hung Hom → East Rail Line → Kowloon Tong, 2 stops, 4 min.

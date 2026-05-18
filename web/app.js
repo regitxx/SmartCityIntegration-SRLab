@@ -173,8 +173,13 @@ ws.addEventListener("message", (ev) => {
       _turnOpen = false;
       const d = msg.data;
       if (_draftingNode && _draftBody) {
-        // If streaming produced text, keep it; otherwise fall back to final text.
-        if (!_draftBody.textContent.trim()) _draftBody.textContent = d.text || "";
+        // ALWAYS overwrite streamed text with the final cleaned text from
+        // the server. The streamed path bypasses the harmony-leak extractor
+        // and source-footer rewriter — keeping the streamed text would mean
+        // bare-leak tool calls (e.g. `transport.plan_journey json{...}`) and
+        // LLM-invented `src:` lines reach the UI. Trust the server's final.
+        const finalText = d.text || "";
+        if (finalText) _draftBody.textContent = finalText;
         _draftBody.classList.remove("streaming");
         const foot = el("div", { className: "footer-src" });
         const lc = langChip(d.lang);
