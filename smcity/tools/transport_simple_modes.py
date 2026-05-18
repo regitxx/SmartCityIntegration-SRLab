@@ -27,8 +27,64 @@ _TAXI_INCREMENT_HKD = 1.9  # per 200 m after the first 2 km
 _TAXI_INCREMENT_DISTANCE_M = 200
 
 
-async def _geocode_one(query: str) -> tuple[float, float] | None:
-    """One-shot ALS call returning the best candidate's (lat, lng), or None."""
+# Common HK landmark / institution aliases that ALS doesn't reliably resolve.
+# Mapped to the nearest well-known address that ALS DOES geocode, or to an
+# MTR station name the catalog will match. Hand-curated; extend as needed.
+_LANDMARK_ALIASES: dict[str, str] = {
+    "cityu": "City University of Hong Kong, Tat Chee Avenue, Kowloon Tong",
+    "polyu": "Hong Kong Polytechnic University, Hung Hom",
+    "hku": "HKU",  # MTR station catalog has this directly
+    "cuhk": "University",  # MTR station name for CUHK's campus stop
+    "hkust": "Clear Water Bay",  # closest landmark
+    "ust": "Clear Water Bay",
+    "baptist u": "Baptist University, Renfrew Road, Kowloon Tong",
+    "hkbu": "Baptist University, Renfrew Road, Kowloon Tong",
+    "lingnan u": "Lingnan University, Tuen Mun",
+    "ouhk": "OUHK, Homantin",
+    "disneyland": "Disneyland Resort",
+    "ocean park": "Ocean Park",
+    "airport": "Airport",
+    "hkia": "Airport",
+}
+
+
+def _normalise_query(query: str) -> str:
+    """Apply landmark-alias replacement to free-text location names."""
+    if not query:
+        return query
+    key = query.strip().lower()
+    return _LANDMARK_ALIASES.get(key, query)
+
+
+async def _geocode_via_mtr_catalog(query: str) -> tuple[float, float] | None:
+    """Try resolving `query` as an MTR station name; return (lat, lng) if so."""
+    # Local imports to avoid cycles at module load time.
+    from smcity.tools.transport import resolve_mtr_station
+    from smcity.tools.transport_search import MTR_STATION_COORDS
+
+    if not query:
+        return None
+    station = resolve_mtr_station(query)
+    if station is None:
+        return None
+    coords = MTR_STATION_COORDS.get(station.code)
+    if coords is None:
+        return None
+    return coords[0], coords[1]
+
+
+async def _geocode_via_als(query: str) -> tuple[float, float] | None:
+    """One-shot ALS call returning the best candidate's (lat, lng), or None.
+
+    ALS (www.als.gov.hk) returns its own schema (NOT GeoJSON):
+      { "SuggestedAddress": [
+          { "Address": { "PremisesAddress": {
+              "GeospatialInformation": {
+                "Latitude":"22.339...", "Longitude":"114.171...",
+                "Northing":"...", "Easting":"..."
+              }, "EngPremisesAddress": {...}, ...
+          }}}]}
+    """
     if not query:
         return None
     try:
@@ -42,17 +98,41 @@ async def _geocode_one(query: str) -> tuple[float, float] | None:
             data = r.json()
     except httpx.HTTPError:
         return None
-    feats = data.get("features") or []
-    if not feats:
+    suggestions = data.get("SuggestedAddress") or []
+    if not suggestions:
         return None
-    props = feats[0].get("properties") or {}
-    geom = feats[0].get("geometry") or {}
-    coords = geom.get("coordinates") or []
-    if len(coords) == 2:
-        return float(coords[1]), float(coords[0])  # (lat, lng)
-    if "lat" in props and "lng" in props:
-        return float(props["lat"]), float(props["lng"])
+    premises = (suggestions[0].get("Address") or {}).get("PremisesAddress") or {}
+    geo_info = premises.get("GeospatialInformation") or {}
+    lat_str = geo_info.get("Latitude")
+    lng_str = geo_info.get("Longitude")
+    if lat_str and lng_str:
+        try:
+            return float(lat_str), float(lng_str)
+        except (TypeError, ValueError):
+            return None
     return None
+
+
+async def _geocode_one(query: str) -> tuple[float, float] | None:
+    """Resolve a free-text place name to (lat, lng).
+
+    Resolution order (cheapest + most reliable first):
+      1. Landmark alias dict (CityU, PolyU, HKU, …) — single dict lookup.
+      2. MTR station catalog — 105 trilingual stations, fuzzy-matched.
+      3. ALS — Lands Department Address Lookup Service. Best for full
+         street addresses; sometimes fuzzy-matches building names.
+
+    Returns `None` if nothing resolves with confidence.
+    """
+    if not query:
+        return None
+    normalised = _normalise_query(query)
+    # 1. MTR station? (cheap, no network, very reliable for stations)
+    mtr_coords = await _geocode_via_mtr_catalog(normalised)
+    if mtr_coords:
+        return mtr_coords
+    # 2. ALS over the network for everything else.
+    return await _geocode_via_als(normalised)
 
 
 class _EndpointArgs(BaseModel):

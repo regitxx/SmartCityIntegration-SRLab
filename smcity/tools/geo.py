@@ -1,7 +1,9 @@
 """geo.address_lookup — Lands Department Address Lookup Service (ALS).
 
 Endpoint: https://www.als.gov.hk/lookup
-Response format: GeoJSON FeatureCollection.
+Response format: ALS-specific JSON — `{"SuggestedAddress": [{"Address":
+{"PremisesAddress": {...}}}, ...]}`. NOT GeoJSON. See `_handler` for the
+exact schema we extract.
 """
 
 from __future__ import annotations
@@ -47,52 +49,68 @@ async def _handler(args: AddressLookupArgs, ctx: ToolContext) -> AddressLookupRe
     except httpx.HTTPError as err:
         raise ToolUpstreamError(f"ALS request failed: {err}") from err
 
+    # ALS returns its own JSON shape, NOT GeoJSON. Schema (essentials):
+    #   data.SuggestedAddress[].Address.PremisesAddress.
+    #     EngPremisesAddress  : { BuildingName?, EngStreet, EngDistrict.DcDistrict, Region }
+    #     ChiPremisesAddress  : same, 繁體
+    #     GeospatialInformation: { Latitude, Longitude, Northing, Easting }
+    # v0.4.8 fixes the schema. Prior versions parsed `features[]` (GeoJSON
+    # shape we never receive) and silently returned empty candidates.
     candidates: list[AddressCandidate] = []
-    for feature in (data.get("features") or [])[: args.max_results]:
-        props = feature.get("properties") or {}
-        geom = feature.get("geometry") or {}
-        coords = geom.get("coordinates") or []
-        # ALS returns a nested structure — address.PremisesAddress.* with both languages.
-        eng_addr = (
-            props.get("EngPremisesAddress") or props.get("address_en") or props.get("EnglishName")
-        )
-        chi_addr = (
-            props.get("ChiPremisesAddress") or props.get("address_tc") or props.get("ChineseName")
-        )
-        # Some ALS responses nest under Address.PremisesAddress
-        if not (eng_addr or chi_addr):
-            inner = (props.get("Address") or {}).get("PremisesAddress") or {}
-            eng_block = inner.get("EngPremisesAddress") or {}
-            chi_block = inner.get("ChiPremisesAddress") or {}
-            eng_addr = eng_block.get("BuildingName") or eng_block.get("StreetName")
-            chi_addr = chi_block.get("BuildingName") or chi_block.get("StreetName")
-            district = (
-                (eng_block.get("District") or {}).get("DcDistrict")
-                if isinstance(eng_block.get("District"), dict)
-                else eng_block.get("DcDistrict")
-            )
-        else:
-            district = props.get("district") or props.get("DcDistrict")
+    for entry in (data.get("SuggestedAddress") or [])[: args.max_results]:
+        premises = (entry.get("Address") or {}).get("PremisesAddress") or {}
+        eng_block = premises.get("EngPremisesAddress") or {}
+        chi_block = premises.get("ChiPremisesAddress") or {}
+        geo_info = premises.get("GeospatialInformation") or {}
 
-        lat = None
-        lng = None
-        if len(coords) == 2:
-            lng, lat = float(coords[0]), float(coords[1])
-        elif "lat" in props and "lng" in props:
-            lat = float(props["lat"])
-            lng = float(props["lng"])
+        eng_name = _compose_name(eng_block, lang="en")
+        chi_name = _compose_name(chi_block, lang="tc")
+        district = _as_str((eng_block.get("EngDistrict") or {}).get("DcDistrict"))
+
+        lat: float | None = None
+        lng: float | None = None
+        lat_raw = geo_info.get("Latitude")
+        lng_raw = geo_info.get("Longitude")
+        if lat_raw and lng_raw:
+            try:
+                lat = float(lat_raw)
+                lng = float(lng_raw)
+            except (TypeError, ValueError):
+                pass
 
         candidates.append(
             AddressCandidate(
-                name_en=_as_str(eng_addr),
-                name_tc=_as_str(chi_addr),
+                name_en=eng_name,
+                name_tc=chi_name,
                 lat=lat,
                 lng=lng,
-                district=_as_str(district),
+                district=district,
             )
         )
 
     return AddressLookupResult(query=args.query, candidates=candidates)
+
+
+def _compose_name(block: dict[str, object], *, lang: str) -> str | None:
+    """Render a user-readable address from an ALS Eng/Chi-PremisesAddress block.
+
+    Order: BuildingName > '<no.> <StreetName>' > StreetName-only.
+    """
+    if not block:
+        return None
+    building = _as_str(block.get("BuildingName"))
+    if building:
+        return building
+    street_key = "EngStreet" if lang == "en" else "ChiStreet"
+    street_block = block.get(street_key)
+    if isinstance(street_block, dict):
+        no = _as_str(street_block.get("BuildingNoFrom"))
+        street = _as_str(street_block.get("StreetName"))
+        if no and street:
+            return f"{no} {street}"
+        if street:
+            return street
+    return None
 
 
 def _as_str(v: object) -> str | None:

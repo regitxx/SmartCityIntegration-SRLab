@@ -60,20 +60,43 @@ def test_unknown_tool_raises_validation_error() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_als_address_lookup_parses_features() -> None:
+async def test_als_address_lookup_parses_real_schema() -> None:
+    """Real ALS schema — SuggestedAddress[]/Address/PremisesAddress/...,
+    NOT GeoJSON features[]. Pre-v0.4.8 the parser checked the wrong path
+    and silently returned 0 candidates for every query."""
     sample: dict[str, Any] = {
-        "features": [
+        "RequestAddress": {"AddressLine": ["Sheung Wan"]},
+        "SuggestedAddress": [
             {
-                "properties": {
-                    "EngPremisesAddress": "Sheung Wan MTR",
-                    "ChiPremisesAddress": "上環港鐵站",
-                    "district": "Central & Western",
-                    "lat": 22.2863,
-                    "lng": 114.1515,
+                "Address": {
+                    "PremisesAddress": {
+                        "EngPremisesAddress": {
+                            "BuildingName": "SHEUNG WAN MTR STATION",
+                            "EngStreet": {
+                                "StreetName": "DES VOEUX ROAD CENTRAL",
+                                "BuildingNoFrom": "1",
+                            },
+                            "EngDistrict": {"DcDistrict": "CENTRAL AND WESTERN DISTRICT"},
+                            "Region": "HK",
+                        },
+                        "ChiPremisesAddress": {
+                            "BuildingName": "上環港鐵站",
+                            "ChiStreet": {"StreetName": "德輔道中", "BuildingNoFrom": "1"},
+                            "ChiDistrict": {"DcDistrict": "中西區"},
+                            "Region": "港島",
+                        },
+                        "GeoAddress": "x",
+                        "GeospatialInformation": {
+                            "Northing": "816000",
+                            "Easting": "834000",
+                            "Latitude": "22.2863",
+                            "Longitude": "114.1515",
+                        },
+                    }
                 },
-                "geometry": {"type": "Point", "coordinates": [114.1515, 22.2863]},
+                "ValidationInformation": {"Score": 95.0},
             }
-        ]
+        ],
     }
     respx.get(ALS_URL).mock(return_value=httpx.Response(200, json=sample))
     registry = build_default_registry()
@@ -82,8 +105,15 @@ async def test_als_address_lookup_parses_features() -> None:
     result = await registry.dispatch("geo.address_lookup", {"query": "Sheung Wan"}, ctx)
     assert result.status == "ok"
     assert result.result is not None
-    assert result.result["candidates"][0]["name_en"] == "Sheung Wan MTR"
-    assert result.result["candidates"][0]["lat"] == pytest.approx(22.2863, rel=1e-4)
+    assert result.result["candidates"], "v0.4.8: real ALS schema must produce candidates"
+    cand = result.result["candidates"][0]
+    assert cand["name_en"] == "SHEUNG WAN MTR STATION"
+    assert cand["name_tc"] == "上環港鐵站"
+    assert cand["lat"] == pytest.approx(22.2863, rel=1e-4)
+    assert cand["lng"] == pytest.approx(114.1515, rel=1e-4)
+    assert "Central and Western" in (cand["district"] or "").lower() or "CENTRAL AND WESTERN" in (
+        cand["district"] or ""
+    )
 
 
 @pytest.mark.asyncio

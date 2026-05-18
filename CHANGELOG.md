@@ -2,6 +2,48 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.8] — 2026-05-19
+
+**Critical bug fix.** ALS (Lands Department Address Lookup Service) was silently returning 0 candidates for every query since v0.1.0 — the parser assumed a GeoJSON `features[]` shape, but ALS actually returns `SuggestedAddress[]` with nested `Address.PremisesAddress.GeospatialInformation.{Latitude,Longitude}`. This single bug broke `geo.address_lookup` and every journey-planning tool that called `_geocode_one`. Hero scenarios like "How do I get from Kowloon Tong to Hung Hom?" were unanswerable.
+
+### Diagnosis path
+
+Driving the boss's hero queries against a live qwen3.5-9b LM Studio instance produced "Origin could not be resolved — provide origin_lat/lng or a clearer name" for every place-name input. Verified ALS returned 3 valid candidates via direct curl; the agent's parser saw 0. Fix touches two consumers + one tool + two tests.
+
+### Changes
+
+- **`smcity/tools/geo.py`** — rewrote `_handler` against the real ALS schema: walks `SuggestedAddress[i].Address.PremisesAddress` for `EngPremisesAddress` / `ChiPremisesAddress` / `GeospatialInformation`. Added `_compose_name()` helper that prefers `BuildingName`, falls back to `<no.> <StreetName>`. Module docstring corrected — was claiming "GeoJSON FeatureCollection" since v0.1.
+- **`smcity/tools/transport_simple_modes.py`** — split `_geocode_one` into three layered resolvers used in order:
+  1. `_LANDMARK_ALIASES` dict (`cityu` → "City University of Hong Kong, Tat Chee Avenue, Kowloon Tong"; `polyu` → "Hong Kong Polytechnic University, Hung Hom"; `hku` → "HKU"; `cuhk` → "University"; `hkust` → "Clear Water Bay"; `hkbu` / `baptist u` / `lingnan u` / `ouhk` / `disneyland` / `ocean park` / `airport` / `hkia`).
+  2. `_geocode_via_mtr_catalog` — fuzzy-matches against the 105-station trilingual MTR catalog using existing `resolve_mtr_station` + `MTR_STATION_COORDS`. Zero network calls.
+  3. `_geocode_via_als` — same fixed real-ALS-schema parser.
+- **`tests/test_tools.py`** — `test_als_address_lookup_parses_features` renamed to `test_als_address_lookup_parses_real_schema`, mock body rewritten to match ALS reality.
+- **`tests/test_simple_modes.py`** — ALS mock updated to real schema; `assert_all_called=False` because the MTR-catalog shortcut now resolves "Mong Kok" before ALS is touched (correct).
+
+### Live verification (after the fix)
+
+```
+geocoder direct calls:
+  'Kowloon Tong'                  → (22.3371, 114.1761)   MTR catalog
+  'Hung Hom'                      → (22.3032, 114.1816)   MTR catalog
+  'CityU'                         → (22.3371, 114.1761)   alias → MTR catalog
+  'PolyU'                         → (22.3032, 114.1816)   alias → MTR catalog
+  'Mong Kok'                      → (22.3195, 114.1692)   MTR catalog
+  'City University of Hong Kong'  → ALS hit, real coords
+
+agent end-to-end against live qwen3.5-9b:
+  "I am at Kowloon Tong, how do I get to Hung Hom?" → answered
+    (walk 53min / taxi ~$56-69 12min / MTR recommended), 73s
+  "How do I get from CityU to PolyU?"               → answered
+    (walk 53min / taxi 12min / MTR recommended),    139s
+```
+
+### Gate
+
+- 253 unit + 7 integration tests green
+- ruff + format + mypy strict clean across 77 source files
+- Live agent confirmed end-to-end on the boss's two hero queries
+
 ## [0.4.7] — 2026-04-23
 
 **First real fuzz run uncovered a judge-blindness bug.** Kicked off a 3-turn smoke against live gpt-oss-120b (LM Studio on Mac Studio) + live smcity agent — 2/3 "failures" were actually the judge's fault: the `tool_trace` passed to it only carried `result_summary` strings like `"8 trains @ Central"`, not the underlying `next_trains[]` array with `ttnt` minutes. When the agent correctly synthesised "下一班 1 分鐘後到, 之後 5/9/12 分鐘" from the real tool output, the judge saw no numbers in the summary and flagged `hallucinated_fact` every time. Fixed.
