@@ -43,10 +43,18 @@ COPY --chown=smcity:smcity smcity_fuzz ./smcity_fuzz
 COPY --chown=smcity:smcity data ./data
 COPY --chown=smcity:smcity web ./web
 
+# /app/state holds the session DB (sessions.sqlite3). In production this
+# directory is overlaid by a named volume so sessions persist across
+# container restarts. Pre-create it in the image so the agent doesn't
+# have to mkdir at startup if the volume mount happens to be missing.
+RUN mkdir -p /app/state && chown smcity:smcity /app/state
+
 USER smcity
 
-# Session DB lives at /app/data/sessions.sqlite3 — owned by smcity user.
-# To persist across container restarts, mount a named volume on /app/data.
+# Session DB lives at /app/state/sessions.sqlite3 — owned by smcity user.
+# To persist across container restarts, mount a named volume on /app/state.
+# (As of v0.4.15 — pre-v0.4.15 deploys mounted the volume at /app/data
+# which masked the baked-in JSON catalogs.)
 
 EXPOSE 8080
 

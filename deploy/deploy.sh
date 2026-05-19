@@ -59,7 +59,7 @@ wait_healthy() {
 }
 
 if (( NO_BUILD == 0 )); then
-  log "Building new image (smcity:0.4.14)…"
+  log "Building new image (smcity:0.4.15)…"
   docker compose build smcity-agent-blue
   # The green replica reuses the same image — no separate build.
 fi

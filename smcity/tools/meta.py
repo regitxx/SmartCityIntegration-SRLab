@@ -104,7 +104,7 @@ WHAT_LANGUAGES_TOOL: ToolSpec[WhatLanguagesArgs, WhatLanguagesResult] = ToolSpec
 
 # --- forget_me -----------------------------------------------------------
 
-_DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "data" / "sessions.sqlite3"
+_DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "state" / "sessions.sqlite3"
 
 
 class ForgetMeArgs(BaseModel):

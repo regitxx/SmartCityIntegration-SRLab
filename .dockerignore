@@ -25,6 +25,7 @@ htmlcov/
 
 # Local-only state that should never enter the image
 data/sessions.sqlite3*
+state/
 logs/
 traces/
 handoff/

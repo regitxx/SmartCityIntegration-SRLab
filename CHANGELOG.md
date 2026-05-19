@@ -2,6 +2,63 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.15] — 2026-05-19
+
+**Data coverage view + Funnel off.** Two boss asks in one ship:
+
+1. *"From now on, almost exclusively via Tailscale Aperture; and it has audit logs and controls."* — flipped `AllowFunnel: false` in `deploy/serveconfig.json`. URL is now **tailnet-only** (Aperture / Serve), no more public-internet path. Reachable from any tailnet member; the boss controls access on his side.
+2. *"For this could also show coverage of the data.gov.hk api or from the excel. I want to see what is added and what isn't added."* — new `/coverage` JSON endpoint + `/data` HTML page reconciling the 35 datasets from `3 - Selected Smart City Data Maps.xlsx` against the live tool registry. Status per row, click-through links to the source data, drift detection if a tool gets renamed.
+
+### Coverage view
+
+- **`data/coverage_catalog.json`** — hand-curated mapping of every xlsx row (35 datasets) to the agent tools that consume it. Each entry has `status: wired | partial | missing`, the list of `tools` that wire it, and a `notes` field explaining edge cases.
+- **`smcity/coverage.py`** — loads the catalog at startup, reconciles against `registry.names()` on every request, returns a pydantic `CoverageReport` with summary counts + per-dataset detail + the extra integrations that aren't in the xlsx (HKO weather, LCSD facilities, HKHA housing, real-time bus operators, etc.).
+- **`GET /coverage`** — JSON API. Adds `any_tool_registered: bool` and `missing_tools: list[str]` to each row so you can spot catalog drift directly in the response.
+- **`GET /data`** — the human view: live-loading page with summary cards (wired/partial/missing counts), filterable table, status colour-coding, and bad-tool-name highlight. Linked from the chat header at `/`.
+
+### Snapshot in numbers
+
+```
+total_xlsx_datasets: 35
+wired:               30   (all OSM POIs via geo.search_osm_pois)
+partial:              4   (S500 GTFS headway, S505 MTR fares,
+                           S507 PT routes-fares, S512 iB1000 topo)
+missing:              1   (S506 Ferry timetable + fares)
+registered_tool_count: 26
+additional_integrations: 13
+```
+
+### Tailnet-only access
+
+- `deploy/serveconfig.json` — `AllowFunnel: false`. `tailscale serve status` now reports "tailnet only" on the sidecar.
+- Tesfa runs Aperture in front of the tailnet; the smcity node sits behind it with no public-internet exposure. Audit logs + identity gating happen at the Aperture layer.
+
+### Tests
+
+`tests/test_coverage.py` — 5 new tests pin:
+- Catalog has all 35 xlsx datasets.
+- Summary totals match per-status row counts.
+- Every tool name in the catalog is registered (catalog-drift guard — caught one typo during development: `meta.what_languages` → `meta.what_languages_are_supported`).
+- Every `wired` dataset has at least one registered tool (no lying about coverage).
+- S506 ferry is correctly marked `missing` with no tools.
+
+261 → 266 total tests.
+
+### Files
+
+- `+ data/coverage_catalog.json`
+- `+ smcity/coverage.py`
+- `+ web/coverage.html`
+- `+ tests/test_coverage.py`
+- `~ smcity/app.py` — `/coverage` + `/data` routes
+- `~ web/index.html` — "data coverage →" link in header
+- `~ deploy/serveconfig.json` — AllowFunnel: false
+- `~ deploy/docker-compose.yml` — image tag bumped to smcity:0.4.15
+
+### Migration
+
+Zero-downtime — first deploy that uses the rolling `./deploy.sh` workflow shipped in v0.4.14. No manual `docker compose down` needed.
+
 ## [0.4.14] — 2026-05-19
 
 **Zero-downtime deploys + Phoenix Arize tracing.** Two things the boss asked for in one shipment:

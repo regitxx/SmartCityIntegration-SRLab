@@ -33,6 +33,7 @@ htmlcov/
 *.sqlite3
 *.db
 data/sessions.sqlite3*
+state/
 logs/
 traces/
 handoff/

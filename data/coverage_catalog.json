@@ -1,0 +1,521 @@
+{
+  "_comment": "Mapping of every dataset in 3 - Selected Smart City Data Maps.xlsx to the agent tools that consume it. Hand-curated; the /coverage endpoint reads this + enriches each entry with live registry state ('is this tool actually registered'). Update this file whenever a dataset is wired, partially wired, or unwired.",
+  "version": "2026-05-19",
+  "source_xlsx": "3 - Selected Smart City Data Maps.xlsx",
+  "datasets": [
+    {
+      "id": "S500",
+      "title": "Headway Information of Public Transport Services",
+      "category": "Transportation",
+      "source": "data.gov.hk",
+      "url": "https://data.gov.hk/en-data/dataset/hk-td-tis_11-pt-headway-en",
+      "format": "GTFS / CSV",
+      "status": "partial",
+      "tools": [
+        "transport.get_kmb_eta_by_stop",
+        "transport.get_kmb_eta_by_route_stop",
+        "transport.get_citybus_eta_by_route_stop",
+        "transport.get_gmb_eta"
+      ],
+      "notes": "Real-time ETA covered via operator APIs (KMB / Citybus / GMB). GTFS scheduled-headway data (per-route per-time-window) is consumed by transport.plan_multimodal_journey via the OTP2 sidecar when running; not yet exposed as a dedicated headway-query tool."
+    },
+    {
+      "id": "S505",
+      "title": "MTR Routes, Fares and Barrier-free Facilities",
+      "category": "Transportation",
+      "source": "data.gov.hk",
+      "url": "https://data.gov.hk/en-data/dataset/mtr-data-routes-fares-barrier-free-facilities",
+      "format": "CSV",
+      "status": "partial",
+      "tools": [
+        "transport.get_mtr_next_trains",
+        "transport.plan_simple_route",
+        "transport.plan_journey"
+      ],
+      "notes": "MTR realtime + 93-station catalog + line topology wired (next-trains API + Dijkstra route planner). Fare table + barrier-free-facility table not yet integrated as dedicated tools."
+    },
+    {
+      "id": "S506",
+      "title": "Fare Table and Timetable of Licensed Ferry Services",
+      "category": "Transportation",
+      "source": "data.gov.hk",
+      "url": "https://data.gov.hk/en-data/dataset/hk-td-wcms_8-ferry-services-tt-ft",
+      "format": "CSV / XLSX",
+      "status": "missing",
+      "tools": [],
+      "notes": "No ferry tool yet. Star Ferry / outlying-island operators (NWFF, Sun Ferry, Fortune Ferry) not in the registry. Next candidate to wire — straightforward CSV ingest."
+    },
+    {
+      "id": "S507",
+      "title": "Routes and Fares of Public Transport",
+      "category": "Transportation",
+      "source": "data.gov.hk",
+      "url": "https://data.gov.hk/en-data/dataset/hk-td-tis_23-routes-fares-geojson",
+      "format": "API / KML / XML / JSON / CSV / MDB",
+      "status": "partial",
+      "tools": [
+        "transport.find_stops_near_point",
+        "transport.find_stops_by_name",
+        "transport.plan_multimodal_journey"
+      ],
+      "notes": "Stop discovery (find_stops_*) + multimodal routing (OTP2) consume this dataset. Per-route fare table not surfaced as a dedicated tool — covered indirectly via planner output."
+    },
+    {
+      "id": "S512",
+      "title": "Digital Topographic Map iB1000",
+      "category": "Geography",
+      "source": "CSDI Portal",
+      "url": "https://portal.csdi.gov.hk/geoportal/?lang=en&datasetId=landsd_rcd_1637223748322_25497",
+      "format": "API / GeoPackage / GeoJSON / GML / FGDB / SHP / KML",
+      "status": "partial",
+      "tools": ["csdi.query_features"],
+      "notes": "Generic CSDI FeatureServer query tool can hit this layer with the right feature-server URL + bbox / where-clause. Not yet wrapped as a purpose-built 'topographic feature near X' tool."
+    },
+    {
+      "id": "S514",
+      "title": "Convenience Stores",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/257T",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "convenience_store"
+    },
+    {
+      "id": "S515",
+      "title": "Supermarkets",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/257V",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "supermarket"
+    },
+    {
+      "id": "S516",
+      "title": "Public Toilets",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/257X",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "public_toilet"
+    },
+    {
+      "id": "S517",
+      "title": "Places of Worship",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/257Y",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "place_of_worship"
+    },
+    {
+      "id": "S518",
+      "title": "MTR Station Entrances",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/2581",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "mtr_station_entrance"
+    },
+    {
+      "id": "S519",
+      "title": "Recycling Locations",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/2582",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "recycling_location"
+    },
+    {
+      "id": "S520",
+      "title": "Veterinarians",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/2583",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "veterinarian"
+    },
+    {
+      "id": "S521",
+      "title": "Hardware Stores",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/2584",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "hardware_store"
+    },
+    {
+      "id": "S522",
+      "title": "Public Elevators",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/2587",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "public_elevator"
+    },
+    {
+      "id": "S523",
+      "title": "Hairdressers",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258i",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "hairdresser"
+    },
+    {
+      "id": "S524",
+      "title": "Clothes Shops",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258l",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "clothes_shop"
+    },
+    {
+      "id": "S525",
+      "title": "Electronics Shops",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258n",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "electronics_shop"
+    },
+    {
+      "id": "S526",
+      "title": "Department Stores",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258p",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "department_store"
+    },
+    {
+      "id": "S527",
+      "title": "Variety Stores",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258y",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "variety_store"
+    },
+    {
+      "id": "S528",
+      "title": "Houseware Shops",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258z",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "houseware_shop"
+    },
+    {
+      "id": "S529",
+      "title": "Beauty Shops",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258B",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "beauty_shop"
+    },
+    {
+      "id": "S530",
+      "title": "Opticians",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258D",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "optician"
+    },
+    {
+      "id": "S531",
+      "title": "Shoe Shops",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258E",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "shoe_shop"
+    },
+    {
+      "id": "S532",
+      "title": "Greengrocers",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258H",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "greengrocer"
+    },
+    {
+      "id": "S533",
+      "title": "Marketplaces",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258I",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "marketplace"
+    },
+    {
+      "id": "S534",
+      "title": "Bookstores",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258K",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "bookstore"
+    },
+    {
+      "id": "S535",
+      "title": "Drinking Water",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258M",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "drinking_water"
+    },
+    {
+      "id": "S536",
+      "title": "Laundries",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/258N",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "laundry"
+    },
+    {
+      "id": "S537",
+      "title": "Government Offices",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/25mM",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "government_office"
+    },
+    {
+      "id": "S538",
+      "title": "Kiosks",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/25mN",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "kiosk"
+    },
+    {
+      "id": "S541",
+      "title": "Dentists",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/25mR",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "dentist"
+    },
+    {
+      "id": "S542",
+      "title": "Bookmakers",
+      "category": "Point of Interests",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/25mS",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "bookmaker"
+    },
+    {
+      "id": "S543",
+      "title": "Locations with Bench",
+      "category": "Road Facilities",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/25mZ",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "bench"
+    },
+    {
+      "id": "S544",
+      "title": "Shelters",
+      "category": "Road Facilities",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/25n0",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "shelter"
+    },
+    {
+      "id": "S549",
+      "title": "Provision of Handrails",
+      "category": "Road Facilities",
+      "source": "OpenStreetMap (via Overpass)",
+      "url": "https://overpass-turbo.eu/s/25na",
+      "format": "JSON / GeoJSON / GPX / KML",
+      "status": "wired",
+      "tools": ["geo.search_osm_pois"],
+      "osm_category": "handrail"
+    }
+  ],
+  "additional_integrations": [
+    {
+      "title": "MTR Real-time Next Trains",
+      "category": "Transportation",
+      "source": "rt.data.gov.hk (MTR Corp)",
+      "url": "https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php",
+      "tools": ["transport.get_mtr_next_trains"],
+      "notes": "Live arrivals per station + line + direction."
+    },
+    {
+      "title": "KMB / LWB Bus Real-time ETA",
+      "category": "Transportation",
+      "source": "data.etabus.gov.hk (KMB)",
+      "url": "https://data.etabus.gov.hk/v1/transport/kmb/",
+      "tools": [
+        "transport.get_kmb_eta_by_stop",
+        "transport.get_kmb_eta_by_route_stop",
+        "transport.find_stops_by_name",
+        "transport.find_stops_near_point"
+      ],
+      "notes": "Per-stop and per-route-stop arrival predictions."
+    },
+    {
+      "title": "Citybus Real-time ETA",
+      "category": "Transportation",
+      "source": "rt.data.gov.hk (Citybus)",
+      "url": "https://rt.data.gov.hk/v2/transport/citybus/",
+      "tools": [
+        "transport.get_citybus_eta_by_route_stop",
+        "transport.get_citybus_route_stops"
+      ]
+    },
+    {
+      "title": "GMB (Green Minibus) Real-time ETA",
+      "category": "Transportation",
+      "source": "data.etagmb.gov.hk",
+      "url": "https://data.etagmb.gov.hk/eta/route-stop/",
+      "tools": ["transport.get_gmb_eta"]
+    },
+    {
+      "title": "OpenTripPlanner 2 Multimodal Journey",
+      "category": "Transportation",
+      "source": "OTP2 sidecar consuming HK GTFS feeds (KMB / Citybus / MTR / GMB)",
+      "tools": ["transport.plan_multimodal_journey"],
+      "notes": "Full multi-modal door-to-door routing including bus + MTR transfers, headways from GTFS schedules. Runs as a separate OTP2 service when enabled."
+    },
+    {
+      "title": "Address Lookup (ALS)",
+      "category": "Geography",
+      "source": "Lands Department (www.als.gov.hk)",
+      "url": "https://www.als.gov.hk/lookup",
+      "tools": ["geo.address_lookup"],
+      "notes": "Used internally by every transport tool as the address-resolution fallback after OSM Nominatim."
+    },
+    {
+      "title": "OSM Nominatim (HK viewbox)",
+      "category": "Geography",
+      "source": "OpenStreetMap",
+      "url": "https://nominatim.openstreetmap.org/search",
+      "tools": [],
+      "notes": "Primary free-text geocoder used internally by the journey planner. Not exposed as a tool — accessed via _geocode_one in smcity/tools/transport_simple_modes.py."
+    },
+    {
+      "title": "Current Weather + 9-day Forecast + Warnings",
+      "category": "Environment",
+      "source": "HKO (Hong Kong Observatory)",
+      "url": "https://data.weather.gov.hk/weatherAPI/opendata/",
+      "tools": [
+        "context.get_current_weather",
+        "context.get_active_warnings",
+        "context.get_9day_forecast"
+      ]
+    },
+    {
+      "title": "Air Quality Health Index",
+      "category": "Environment",
+      "source": "EPD (Environmental Protection Department)",
+      "tools": ["context.get_aqhi"]
+    },
+    {
+      "title": "LCSD Basketball Courts + Swimming Pools",
+      "category": "Public Facilities",
+      "source": "CSDI Portal — LCSD layers",
+      "tools": [
+        "facility.find_nearby_courts",
+        "facility.find_nearby_pools"
+      ]
+    },
+    {
+      "title": "HKHA Public Housing Estates",
+      "category": "Housing",
+      "source": "Hong Kong Housing Authority",
+      "tools": [
+        "housing.get_estate_info",
+        "housing.list_estates_in_district"
+      ]
+    },
+    {
+      "title": "Generic CSDI FeatureServer",
+      "category": "Geography",
+      "source": "CSDI Portal (Common Spatial Data Infrastructure)",
+      "tools": ["csdi.query_features"],
+      "notes": "Generic ArcGIS FeatureServer querier — works for any CSDI dataset given the feature-server URL + filter."
+    },
+    {
+      "title": "Meta / session control",
+      "category": "Agent meta",
+      "source": "internal",
+      "tools": [
+        "meta.ask_user",
+        "meta.forget_me",
+        "meta.what_languages_are_supported"
+      ],
+      "notes": "Session lifecycle tools — clarification questions, GDPR-style forget, language disclosure."
+    }
+  ]
+}

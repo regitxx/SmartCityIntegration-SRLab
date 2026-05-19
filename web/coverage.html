@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LAB_SRL · DATA COVERAGE</title>
+<link rel="stylesheet" href="/assets/style.css" />
+<style>
+  /* Coverage-specific layout overrides — leaves the chat style.css untouched. */
+  main.coverage {
+    padding: 1rem 1.5rem;
+    max-width: 1200px;
+    margin: 0 auto;
+    font-family: var(--mono, ui-monospace, "SF Mono", Menlo, monospace);
+    color: var(--fg, #d8d3c4);
+  }
+  .summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin: 1rem 0 2rem;
+  }
+  .stat {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 0.75rem 1rem;
+    min-width: 120px;
+  }
+  .stat .v { font-size: 1.6rem; line-height: 1.1; }
+  .stat .l { font-size: 0.7rem; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat.wired   .v { color: #7ec07e; }
+  .stat.partial .v { color: #d8a85d; }
+  .stat.missing .v { color: #c97070; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 2rem;
+    font-size: 0.85rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.45rem 0.6rem;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    vertical-align: top;
+  }
+  th { font-size: 0.7rem; text-transform: uppercase; opacity: 0.6; letter-spacing: 0.05em; }
+  tr.wired   td:first-child { border-left: 3px solid #7ec07e; }
+  tr.partial td:first-child { border-left: 3px solid #d8a85d; }
+  tr.missing td:first-child { border-left: 3px solid #c97070; }
+  td.status { white-space: nowrap; font-weight: 600; }
+  td.status.wired  { color: #7ec07e; }
+  td.status.partial { color: #d8a85d; }
+  td.status.missing { color: #c97070; }
+  td.tools { font-size: 0.75rem; opacity: 0.85; }
+  td.tools code {
+    display: inline-block;
+    margin: 0 0.25rem 0.25rem 0;
+    padding: 1px 5px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 3px;
+  }
+  td.tools code.missing-tool {
+    background: rgba(201, 112, 112, 0.18);
+    color: #ffb3b3;
+  }
+  td.notes { font-size: 0.78rem; opacity: 0.75; max-width: 360px; }
+  td a { color: #9bb7d8; text-decoration: none; }
+  td a:hover { text-decoration: underline; }
+  h2 { margin: 2rem 0 0.5rem; font-size: 1rem; opacity: 0.85; }
+  .filters { display: flex; gap: 0.5rem; margin: 0.5rem 0 1rem; font-size: 0.8rem; }
+  .filters button {
+    background: rgba(255,255,255,0.04);
+    color: var(--fg, #d8d3c4);
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 0.3rem 0.7rem;
+    cursor: pointer;
+    font: inherit;
+  }
+  .filters button.active { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.25); }
+  .nav-back { font-size: 0.8rem; opacity: 0.7; }
+  .nav-back a { color: inherit; text-decoration: underline; }
+</style>
+</head>
+<body data-theme="dark">
+
+<header class="chrome" role="banner">
+  <div class="label">LAB_SRL · DATA_COVERAGE</div>
+  <div class="header-spacer"></div>
+  <div class="nav-back"><a href="/">← back to chat</a></div>
+</header>
+
+<main class="coverage">
+  <p style="opacity:0.7;font-size:0.85rem;margin-bottom:0;">
+    What every dataset in <em>3 - Selected Smart City Data Maps.xlsx</em> maps to in this agent build,
+    plus the additional integrations beyond the spreadsheet. Status is recomputed live against the
+    running tool registry — if a tool gets renamed without updating the catalog, the row's tools
+    column will show the missing name in red.
+  </p>
+
+  <div class="summary" id="summary">loading…</div>
+
+  <h2>Datasets in the spreadsheet (<span id="ds-count">?</span>)</h2>
+  <div class="filters" id="filters">
+    <button data-filter="all" class="active">all</button>
+    <button data-filter="wired">wired</button>
+    <button data-filter="partial">partial</button>
+    <button data-filter="missing">missing</button>
+  </div>
+  <table id="datasets">
+    <thead><tr>
+      <th>ID</th><th>Title</th><th>Category</th><th>Source</th>
+      <th>Status</th><th>Wired by</th><th>Notes</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <h2>Additional integrations (<span id="ai-count">?</span>)</h2>
+  <p style="opacity:0.65;font-size:0.78rem;margin-top:-0.25rem;">
+    Tools wired up that aren't in the spreadsheet — weather, AQHI, LCSD facilities, housing,
+    realtime transport ETAs, etc.
+  </p>
+  <table id="additional">
+    <thead><tr>
+      <th>Title</th><th>Category</th><th>Source</th><th>Wired by</th><th>Notes</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+</main>
+
+<script type="module">
+async function load() {
+  const r = await fetch("/coverage", { headers: { "Accept": "application/json" }});
+  if (!r.ok) {
+    document.getElementById("summary").textContent = `error: HTTP ${r.status}`;
+    return;
+  }
+  const report = await r.json();
+  renderSummary(report.summary);
+  renderDatasets(report.datasets);
+  renderAdditional(report.additional_integrations);
+  wireFilters();
+}
+
+function renderSummary(s) {
+  document.getElementById("summary").innerHTML = `
+    <div class="stat"><div class="v">${s.total_xlsx_datasets}</div><div class="l">xlsx datasets</div></div>
+    <div class="stat wired"><div class="v">${s.wired}</div><div class="l">wired</div></div>
+    <div class="stat partial"><div class="v">${s.partial}</div><div class="l">partial</div></div>
+    <div class="stat missing"><div class="v">${s.missing}</div><div class="l">missing</div></div>
+    <div class="stat"><div class="v">${s.registered_tool_count}</div><div class="l">tools registered</div></div>
+  `;
+  document.getElementById("ds-count").textContent = s.total_xlsx_datasets;
+}
+
+function renderDatasets(rows) {
+  const tbody = document.querySelector("#datasets tbody");
+  tbody.innerHTML = rows.map(d => `
+    <tr class="${d.status}" data-status="${d.status}">
+      <td><strong>${escapeHtml(d.id)}</strong></td>
+      <td>${escapeHtml(d.title)}</td>
+      <td>${escapeHtml(d.category)}</td>
+      <td>${d.url ? `<a href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.source)} ↗</a>` : escapeHtml(d.source)}</td>
+      <td class="status ${d.status}">${d.status}</td>
+      <td class="tools">${renderTools(d.tools, d.missing_tools)}</td>
+      <td class="notes">${d.notes ? escapeHtml(d.notes) : ""}</td>
+    </tr>
+  `).join("");
+}
+
+function renderAdditional(rows) {
+  const tbody = document.querySelector("#additional tbody");
+  document.getElementById("ai-count").textContent = rows.length;
+  tbody.innerHTML = rows.map(d => `
+    <tr>
+      <td><strong>${escapeHtml(d.title)}</strong></td>
+      <td>${escapeHtml(d.category)}</td>
+      <td>${d.url ? `<a href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.source)} ↗</a>` : escapeHtml(d.source)}</td>
+      <td class="tools">${renderTools(d.tools, d.missing_tools)}</td>
+      <td class="notes">${d.notes ? escapeHtml(d.notes) : ""}</td>
+    </tr>
+  `).join("");
+}
+
+function renderTools(tools, missing) {
+  if (!tools.length) return "—";
+  const missingSet = new Set(missing || []);
+  return tools.map(t => {
+    const cls = missingSet.has(t) ? "missing-tool" : "";
+    return `<code class="${cls}" title="${missingSet.has(t) ? 'NOT registered in current build' : 'registered'}">${escapeHtml(t)}</code>`;
+  }).join("");
+}
+
+function wireFilters() {
+  document.querySelectorAll("#filters button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#filters button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      const f = btn.dataset.filter;
+      document.querySelectorAll("#datasets tbody tr").forEach(tr => {
+        tr.style.display = (f === "all" || tr.dataset.status === f) ? "" : "none";
+      });
+    });
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+load();
+</script>
+</body>
+</html>

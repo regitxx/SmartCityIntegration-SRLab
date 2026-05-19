@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from smcity import __version__
+from smcity.coverage import CoverageReport, compute_coverage
 from smcity.llm import ping
 from smcity.observability import init_tracing, shutdown_tracing
 from smcity.orchestrator import Orchestrator, TurnEvent
@@ -35,7 +36,13 @@ from smcity.settings import get_settings
 log = structlog.get_logger("smcity")
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
-DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "sessions.sqlite3"
+# Session DB lives in `state/`, not `data/`, so the `data/` directory can
+# stay a pure read-only-static-files location backed only by the image. In
+# the docker deploy, /app/state is the named-volume mount point (see
+# deploy/docker-compose.yml). Moving sessions out of /app/data unmasks the
+# baked-in JSON catalogs (mtr_stations / mtr_lines / coverage_catalog /
+# hkha_name_map_tc) which were previously hidden behind the volume.
+DEFAULT_DB = Path(__file__).resolve().parent.parent / "state" / "sessions.sqlite3"
 
 
 def _configure_logging() -> None:
@@ -93,6 +100,21 @@ async def health() -> Health:
         llm_model=s.llm_model,
         version=__version__,
     )
+
+
+@app.get("/coverage", response_model=CoverageReport)
+async def coverage() -> CoverageReport:
+    """Return what data the agent actually consumes — every dataset from
+    the Selected Smart City Data Maps xlsx with its current wire-up status,
+    plus the additional integrations (HKO weather, LCSD facilities, etc.)
+    that aren't in the xlsx but are wired anyway.
+
+    Boss-requested ("show coverage of the data.gov.hk API or from the
+    excel; I want to see what is added and what isn't added").
+    """
+    orchestrator: Orchestrator = app.state.orchestrator
+    registered = set(orchestrator._registry.names())
+    return compute_coverage(registered)
 
 
 @app.post("/turn", response_model=TurnResponse)
@@ -243,6 +265,20 @@ async def index() -> FileResponse | JSONResponse:
     if not index_path.exists():
         return JSONResponse({"detail": "web/ not built yet"}, status_code=404)
     return FileResponse(index_path)
+
+
+@app.get("/data", response_model=None, include_in_schema=False)
+async def coverage_page() -> FileResponse | JSONResponse:
+    """Serve the data-coverage UI (separate from the chat at /).
+
+    Lists every dataset from the Selected Smart City Data Maps xlsx + its
+    wire-up status, plus the additional integrations beyond the xlsx.
+    The JSON behind it is at /coverage.
+    """
+    page_path = WEB_ROOT / "coverage.html"
+    if not page_path.exists():
+        return JSONResponse({"detail": "coverage.html not built yet"}, status_code=404)
+    return FileResponse(page_path)
 
 
 # ---- helpers -------------------------------------------------------------
