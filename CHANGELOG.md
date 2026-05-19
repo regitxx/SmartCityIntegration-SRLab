@@ -2,6 +2,55 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.13] — 2026-05-19
+
+**Replaces the v0.4.12 hardcoded landmark dict with a generic geocoder backed by OSM Nominatim.** v0.4.12 fixed the PolyU/CityU symptom by adding 84 explicit string→coords entries for seven universities + Disneyland — which would have failed the moment a real user asked about a restaurant, mall, hospital, park, beach, hotel, school, or any street that wasn't already in the dict. User feedback was direct ("you cannot just build custom solutions for example this is poor quality coder") and correct. This release deletes that dict and routes free-text queries through OSM Nominatim with a Hong Kong viewbox, which has comprehensive HK coverage in EN / 繁 / 简 from community-edited OSM data and handles the long-tail automatically.
+
+### Geocoder (smcity/tools/transport_simple_modes.py)
+
+New three-tier chain, each tier hit only if the previous returned `None`:
+
+1. **Exact MTR station match** — case-insensitive, multilingual (EN / 繁 / 简), no fuzz. Cheap (in-memory dict), deterministic, handles `"Kowloon Tong"` / `"九龍塘"` / `"九龙塘"` → station coords for high-precision routing.
+2. **OSM Nominatim** with `viewbox=113.83,22.56,114.43,22.15&bounded=1` — primary free-text geocoder. Verified live against 25 real-world HK queries (English + Traditional + Simplified): handles landmarks (M+, K11 MUSEA, Pacific Place, Festival Walk), restaurants (Tim Ho Wan), suburbs (Stanley, Discovery Bay, Tai O, Sham Tseng), temples (黃大仙廟), beaches (Repulse Bay), institutions (HKU/PolyU/CityU when given names containing "Hong Kong"), and the universal Chinese-name path (鯉魚門, 西貢, 大澳, 海洋公園, 彌敦道, 中環, 尖沙咀). Picks the highest-importance candidate from the top 5, so the prominent mall wins over an obscure street fragment that happens to share a word.
+3. **ALS** (Lands Department) — fallback for street-level addresses Nominatim may not have (`"11 Yuk Choi Road"`, `"Block 5 Whampoa Estate"`).
+
+### Prompt: prefer canonical names
+
+OSM-data quirk: the "CityU" abbreviation is tagged on the **CityU Veterinary Medical Centre** in Sham Shui Po (importance 0.208) — the **main City University of Hong Kong campus** is only tagged with the full English/Chinese names. Same shape: bare abbreviation queries can hit a satellite office whose name happens to contain the abbreviation. Solved at the prompt layer (not in data): `SYSTEM_PROMPT` now instructs the LLM to pass full canonical names ("Hong Kong Polytechnic University" / "香港城市大學") to transport tools. This is correct LLM behaviour, not a per-place patch.
+
+### Removed
+
+- The 84-entry `_LANDMARK_COORDS` dict added in v0.4.12 (PolyU / CityU / HKU / CUHK / HKUST / HKBU / Lingnan / Disneyland variants).
+- The `_landmark_lookup` helper that read from it.
+- The associated test `test_landmark_lookup_universities_multilingual` (irrelevant under the new architecture).
+
+What's left is one small layer (exact MTR station match) that's defensible because the MTR catalog is a finite, authoritative, slow-to-change set, not "places we happened to test".
+
+### Why Nominatim and not OSM-self-hosted / Google Maps
+
+- Nominatim's public instance accepts ~1 req/s, free, no API key, no terms-of-service drama. Our usage profile is ≤2 geocodes per user turn — well inside the limit even for a busy demo. Self-hosting Nominatim is a single Docker container if we ever outgrow the public instance.
+- Google Maps requires a billed API key and a content-attribution overlay we'd have to render in the UI. Doesn't fit the "real public data, no commercial entanglement" project framing.
+
+### Nominatim policy compliance
+
+- `User-Agent: smcity-agent/0.4.13 (Lab of Social Robotics; HK smart-city assistant)` — the policy requires a meaningful UA identifying the application.
+- `Accept-Language: en,zh-Hant,zh-Hans` so name fields come back in the user's likely language.
+- 5 s timeout; failures fall through to the ALS tier rather than crashing the planner.
+
+### Tests
+
+`tests/test_simple_modes.py` rewritten again:
+- New `test_geocode_one_prefers_exact_mtr_over_nominatim_and_als` — proves Tier 1 short-circuits cleanly.
+- New `test_geocode_one_falls_through_to_nominatim` — uses a realistic Nominatim response with multiple candidates of varying `importance`; asserts the highest-importance result wins (this is the actual fix for the CityU vet-centre vs main-campus disambiguation).
+- New `test_geocode_one_falls_through_to_als_when_nominatim_empty` — Tier 3 fires only when Tier 2 returned nothing.
+- New `test_geocode_one_nominatim_failure_falls_through_to_als` — when Nominatim 500s/times out, ALS gets tried.
+- New `test_geocode_one_returns_none_when_all_tiers_fail` — error path is `None` not exception.
+- Old `test_landmark_lookup_*` tests deleted (no longer applicable).
+
+### Migration
+
+Docker rebuild required (`docker compose up -d --build` on Mac Studio). Image tag bumped to `smcity:0.4.13`.
+
 ## [0.4.12] — 2026-05-19
 
 **Geocoder rewrite + taxi removal.** A live boss-demo query — "Im in polyu how do I get to cityu" — returned "just walk, it's 1 minute away". Root cause: `fuzz.WRatio` in `resolve_mtr_station` scored *"Polytechnic University Hong Kong"* against MTR station *"University"* (CUHK at Sha Tin) at 90, while substring-matching any single-word station name (Central / Airport / Kowloon / HKU / …) appearing anywhere in the query. Both PolyU and CityU collapsed to the *same* wrong point (22.4149, 114.2098), so the planner truthfully returned "0 m walk, 1 min" — looking plausible while being completely wrong.

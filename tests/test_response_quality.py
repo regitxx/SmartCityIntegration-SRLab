@@ -95,6 +95,39 @@ def test_system_prompt_forbids_taxi_mode() -> None:
     assert "plan_taxi_estimate" not in SYSTEM_PROMPT
 
 
+def test_normalise_whitespace_collapses_exotic_unicode_spaces() -> None:
+    """gpt-oss-120b inserts U+202F NARROW NO-BREAK SPACE between paired words
+    like 'Mong Kok' as a typography flourish. Renders fine in browsers but
+    breaks substring search + copy-paste. The orchestrator must normalise
+    these to ASCII spaces before storing/returning the reply.
+    """
+    from smcity.orchestrator import _normalise_whitespace
+
+    # Each of these is a different exotic Unicode space.
+    fancy_pairs = [
+        "Mong Kok",  # NARROW NO-BREAK SPACE
+        "Mong Kok",  # NO-BREAK SPACE
+        "Mong Kok",  # FIGURE SPACE
+        "Mong Kok",  # THIN SPACE
+        "Mong Kok",  # HAIR SPACE
+    ]
+    for inp in fancy_pairs:
+        out = _normalise_whitespace(inp)
+        assert out == "Mong Kok", f"failed to normalise {inp!r} → {out!r}"
+    # Regular ASCII space must pass through unchanged.
+    assert _normalise_whitespace("Mong Kok") == "Mong Kok"
+
+
+def test_system_prompt_directs_canonical_place_names() -> None:
+    """v0.4.13 — OSM tags some abbreviations on satellite offices (e.g. 'CityU'
+    is tagged on the vet centre, not the main campus). Prompt must tell the
+    LLM to use canonical full names when calling transport tools.
+    """
+    assert "canonical" in SYSTEM_PROMPT
+    assert "Hong Kong Polytechnic University" in SYSTEM_PROMPT
+    assert "City University of Hong Kong" in SYSTEM_PROMPT
+
+
 def test_system_prompt_forbids_harmony_tokens_in_reply() -> None:
     """Past live bug: harmony tokens leaked into the reply text. Prompt must
     explicitly tell the LLM to emit tool calls via the structured channel."""

@@ -1,9 +1,15 @@
-"""Unit tests for the walking + journey planners (post-v0.4.12).
+"""Unit tests for the walking + journey planners (post-v0.4.13).
 
-Taxi was removed in v0.4.12 (see CHANGELOG / feedback-no-taxi memory).
-Geocoder was rewritten to: landmark-override → exact-MTR-match → ALS,
-with a 100 m collision guard. These tests pin the new behaviour and
-prevent regressing the PolyU = CityU bug.
+Taxi was removed in v0.4.12. Geocoder rewritten in v0.4.13 from a
+hardcoded landmark dict to a generic 3-tier chain:
+
+  1. Exact MTR station match (cheap, deterministic, multilingual)
+  2. OSM Nominatim with HK viewbox (primary free-text geocoder)
+  3. ALS (Lands Department address service, fallback)
+
+These tests verify the tier order and the boundary behaviours
+(collision guard, schema rejection of taxi, gpt-oss arg-unwrap) without
+hardcoding any specific landmark string → coords assertion.
 """
 # ruff: noqa: RUF003  # `×` and `→` in comments are intentional for readability.
 
@@ -17,84 +23,25 @@ from smcity.tools import build_default_registry
 from smcity.tools.geo import ALS_URL
 from smcity.tools.registry import ToolContext
 from smcity.tools.transport_simple_modes import (
+    NOMINATIM_URL,
     _exact_mtr_station_match,
     _geocode_one,
-    _landmark_lookup,
 )
 
-# --- geocoder unit tests -------------------------------------------------
-
-
-def test_landmark_lookup_disneyland_multilingual() -> None:
-    """All language variants of 'Disneyland' resolve to the same Lantau coords."""
-    expected = (22.31480, 114.04460)
-    for q in [
-        "disneyland",
-        "Disneyland",
-        "DISNEYLAND",
-        "Hong Kong Disneyland",
-        "hk disneyland",
-        "迪士尼",
-        "迪士尼樂園",  # Traditional
-        "迪士尼乐园",  # Simplified
-        "香港迪士尼樂園",
-        "香港迪士尼乐园",
-    ]:
-        assert _landmark_lookup(q) == expected, f"failed for {q!r}"
-
-
-def test_landmark_lookup_universities_multilingual() -> None:
-    """The HK university abbreviations + Chinese names all resolve correctly.
-
-    Verifies the v0.4.12 fix for the live boss-demo failure: ALS returned
-    a Fanling-area address for the bare query "PolyU", and CUHK-area
-    junk for "城市大學" without the 香港 prefix.
-    """
-    cases = [
-        # PolyU — Hung Hom area
-        (["polyu", "PolyU", "理工大學", "理工大学", "香港理工"], 22.30410, 114.17907),
-        # CityU — Kowloon Tong
-        (["cityu", "CityU", "城市大學", "城市大学", "city university"], 22.33612, 114.17418),
-        # HKU — Pok Fu Lam main campus
-        (["hku", "HKU", "港大", "香港大學", "university of hong kong"], 22.28131, 114.14016),
-        # CUHK — Sha Tin
-        (["cuhk", "中大", "中文大學", "chinese university"], 22.41940, 114.20680),
-        # HKUST — Clear Water Bay
-        (["hkust", "ust", "科大", "香港科技大學"], 22.33670, 114.26730),
-        # HKBU — Kowloon Tong
-        (["hkbu", "浸大", "baptist university"], 22.33930, 114.18030),
-    ]
-    for variants, lat, lng in cases:
-        for q in variants:
-            hit = _landmark_lookup(q)
-            assert hit is not None, f"no landmark hit for {q!r}"
-            assert abs(hit[0] - lat) < 0.0001 and abs(hit[1] - lng) < 0.0001, (
-                f"{q!r}: expected ({lat}, {lng}), got {hit}"
-            )
-
-
-def test_landmark_lookup_unknown_returns_none() -> None:
-    assert _landmark_lookup("Times Square") is None
-    assert _landmark_lookup("") is None
-    assert _landmark_lookup("not a real place") is None
+# --- exact MTR station match ---------------------------------------------
 
 
 def test_exact_mtr_station_match_english() -> None:
-    """Exact case-insensitive match against an English station name."""
-    # Kowloon Tong station; coords sourced from MTR_STATION_COORDS.
     hit = _exact_mtr_station_match("Kowloon Tong")
     assert hit is not None
     lat, lng = hit
     assert 22.33 < lat < 22.34
     assert 114.17 < lng < 114.18
-
-    # Case-insensitive.
     assert _exact_mtr_station_match("kowloon tong") == hit
     assert _exact_mtr_station_match("KOWLOON TONG") == hit
 
 
 def test_exact_mtr_station_match_traditional_chinese() -> None:
-    """Traditional Chinese station name resolves to the same coords."""
     hit_en = _exact_mtr_station_match("Tsim Sha Tsui")
     hit_zh = _exact_mtr_station_match("尖沙咀")
     assert hit_en is not None and hit_zh is not None
@@ -102,13 +49,12 @@ def test_exact_mtr_station_match_traditional_chinese() -> None:
 
 
 def test_exact_mtr_station_match_no_substring_false_positive() -> None:
-    """The v0.4.11 PolyU/CityU bug — 'Polytechnic University Hong Kong' was
-    matching MTR 'University' station via `fuzz.WRatio`. The exact-match
-    matcher must NOT fire on these substring-y queries.
+    """v0.4.11 PolyU/CityU bug regression guard: substring-y queries must
+    NOT match an MTR station via fuzzy means.
     """
     assert _exact_mtr_station_match("Polytechnic University Hong Kong") is None
     assert _exact_mtr_station_match("City University of Hong Kong") is None
-    assert _exact_mtr_station_match("HKU SPACE") is None  # legitimate non-station
+    assert _exact_mtr_station_match("HKU SPACE") is None
 
 
 def test_exact_mtr_station_match_unknown_returns_none() -> None:
@@ -116,60 +62,141 @@ def test_exact_mtr_station_match_unknown_returns_none() -> None:
     assert _exact_mtr_station_match("totally not a station") is None
 
 
-@pytest.mark.asyncio
-async def test_geocode_one_prefers_landmark_override() -> None:
-    """Landmark override (Disneyland) wins even though ALS would return junk."""
-    # No ALS mock — if landmark override didn't fire, this would hit the live
-    # network. Use respx to be sure.
-    with respx.mock(base_url=ALS_URL.rsplit("/", 1)[0], assert_all_called=False) as mock:
-        mock.get("/lookup").mock(return_value=httpx.Response(500))
-        coords = await _geocode_one("Hong Kong Disneyland")
-    assert coords == (22.31480, 114.04460)
+# --- geocoder tier ordering ----------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_geocode_one_prefers_exact_mtr_over_als() -> None:
-    """Exact MTR station match wins over ALS — ALS shouldn't even be called."""
-    with respx.mock(base_url=ALS_URL.rsplit("/", 1)[0], assert_all_called=False) as mock:
-        route = mock.get("/lookup").mock(return_value=httpx.Response(500))
+async def test_geocode_one_prefers_exact_mtr_over_nominatim_and_als() -> None:
+    """Exact MTR station match wins — neither Nominatim nor ALS should fire."""
+    with (
+        respx.mock(base_url="https://nominatim.openstreetmap.org", assert_all_called=False) as n,
+        respx.mock(base_url=ALS_URL.rsplit("/", 1)[0], assert_all_called=False) as a,
+    ):
+        nom_route = n.get("/search").mock(return_value=httpx.Response(500))
+        als_route = a.get("/lookup").mock(return_value=httpx.Response(500))
         coords = await _geocode_one("Kowloon Tong")
     assert coords is not None
-    assert route.called is False, "ALS must NOT be called when exact MTR match exists"
+    assert not nom_route.called, "Nominatim must NOT be called when exact MTR match exists"
+    assert not als_route.called, "ALS must NOT be called when exact MTR match exists"
 
 
 @pytest.mark.asyncio
-async def test_geocode_one_falls_through_to_als() -> None:
-    """A query that's not in landmark_coords and not an MTR station name must
-    hit ALS. 'Festival Walk' is the mall in Kowloon Tong — not an MTR station
-    and not in the landmark override table, so it's the ALS tier's domain.
+async def test_geocode_one_falls_through_to_nominatim() -> None:
+    """Free-text place name → Nominatim (Tier 2).
+
+    OSM-shaped response with importance scores; geocoder picks the highest.
     """
-    sample = {
-        "RequestAddress": {"AddressLine": ["Festival Walk"]},
+    nominatim_sample = [
+        {
+            "lat": "22.3290573",
+            "lon": "114.1594910",
+            "class": "amenity",
+            "type": "veterinary",
+            "importance": 0.208,
+            "display_name": "CityU Veterinary Medical Centre",
+        },
+        {
+            "lat": "22.3400205",
+            "lon": "114.1697162",
+            "class": "amenity",
+            "type": "university",
+            "importance": 0.519,
+            "display_name": "City University of Hong Kong",
+        },
+    ]
+    with (
+        respx.mock(base_url="https://nominatim.openstreetmap.org") as n,
+        respx.mock(base_url=ALS_URL.rsplit("/", 1)[0], assert_all_called=False) as a,
+    ):
+        nom_route = n.get("/search").mock(
+            return_value=httpx.Response(200, json=nominatim_sample)
+        )
+        als_route = a.get("/lookup").mock(return_value=httpx.Response(500))
+        coords = await _geocode_one("City University of Hong Kong")
+    assert nom_route.called, "Nominatim must be called for non-station free-text"
+    assert not als_route.called, "ALS must NOT be called when Nominatim resolved"
+    assert coords is not None
+    # Picked the higher-importance candidate, not the first one.
+    assert abs(coords[0] - 22.3400205) < 1e-5
+    assert abs(coords[1] - 114.1697162) < 1e-5
+
+
+@pytest.mark.asyncio
+async def test_geocode_one_falls_through_to_als_when_nominatim_empty() -> None:
+    """If Nominatim returns nothing, fall through to ALS for street addresses."""
+    als_sample = {
         "SuggestedAddress": [
             {
                 "Address": {
                     "PremisesAddress": {
-                        "EngPremisesAddress": {
-                            "BuildingName": "FESTIVAL WALK",
-                            "EngStreet": {"StreetName": "TAT CHEE AVENUE"},
-                        },
+                        "EngPremisesAddress": {"BuildingName": "TEST"},
                         "GeospatialInformation": {
-                            "Latitude": "22.33705",
-                            "Longitude": "114.17487",
+                            "Latitude": "22.3000",
+                            "Longitude": "114.1800",
                         },
                     }
                 }
             }
-        ],
+        ]
     }
-    with respx.mock(base_url=ALS_URL.rsplit("/", 1)[0]) as mock:
-        route = mock.get("/lookup").mock(return_value=httpx.Response(200, json=sample))
-        coords = await _geocode_one("Festival Walk")
-    assert route.called, "ALS should be hit for non-landmark, non-station names"
+    with (
+        respx.mock(base_url="https://nominatim.openstreetmap.org") as n,
+        respx.mock(base_url=ALS_URL.rsplit("/", 1)[0]) as a,
+    ):
+        nom_route = n.get("/search").mock(return_value=httpx.Response(200, json=[]))
+        als_route = a.get("/lookup").mock(return_value=httpx.Response(200, json=als_sample))
+        coords = await _geocode_one("11 Yuk Choi Road, Hung Hom")
+    assert nom_route.called
+    assert als_route.called
     assert coords is not None
-    lat, lng = coords
-    assert 22.33 < lat < 22.34
-    assert 114.17 < lng < 114.18
+    assert abs(coords[0] - 22.3000) < 1e-3
+    assert abs(coords[1] - 114.1800) < 1e-3
+
+
+@pytest.mark.asyncio
+async def test_geocode_one_returns_none_when_all_tiers_fail() -> None:
+    """All three tiers refusing → None (handler will raise a user-visible error)."""
+    with (
+        respx.mock(base_url="https://nominatim.openstreetmap.org") as n,
+        respx.mock(base_url=ALS_URL.rsplit("/", 1)[0]) as a,
+    ):
+        n.get("/search").mock(return_value=httpx.Response(200, json=[]))
+        a.get("/lookup").mock(return_value=httpx.Response(200, json={"SuggestedAddress": []}))
+        coords = await _geocode_one("xyz-nonsense-place-name-1234567890")
+    assert coords is None
+
+
+@pytest.mark.asyncio
+async def test_geocode_one_nominatim_failure_falls_through_to_als() -> None:
+    """If Nominatim errors (timeout, 500, network), ALS should still be tried."""
+    als_sample = {
+        "SuggestedAddress": [
+            {
+                "Address": {
+                    "PremisesAddress": {
+                        "GeospatialInformation": {
+                            "Latitude": "22.3100",
+                            "Longitude": "114.1700",
+                        }
+                    }
+                }
+            }
+        ]
+    }
+    with (
+        respx.mock(base_url="https://nominatim.openstreetmap.org") as n,
+        respx.mock(base_url=ALS_URL.rsplit("/", 1)[0]) as a,
+    ):
+        n.get("/search").mock(return_value=httpx.Response(500))
+        a.get("/lookup").mock(return_value=httpx.Response(200, json=als_sample))
+        coords = await _geocode_one("some place")
+    assert coords is not None
+    assert abs(coords[0] - 22.3100) < 1e-3
+
+
+def test_nominatim_url_constant_points_to_real_endpoint() -> None:
+    """Avoid silent endpoint drift — pin the URL constant."""
+    assert NOMINATIM_URL == "https://nominatim.openstreetmap.org/search"
 
 
 # --- plan_walking_route --------------------------------------------------
@@ -201,7 +228,7 @@ async def test_plan_walking_route_with_lat_lng() -> None:
 
 @pytest.mark.asyncio
 async def test_plan_journey_returns_walk_and_mtr_only() -> None:
-    """No taxi mode in v0.4.12 — only walk + MTR."""
+    """No taxi mode in v0.4.12+ — only walk + MTR."""
     registry = build_default_registry()
     ctx = ToolContext(session_id="j-1")
     result = await registry.dispatch(
@@ -223,7 +250,7 @@ async def test_plan_journey_returns_walk_and_mtr_only() -> None:
 
 @pytest.mark.asyncio
 async def test_plan_journey_taxi_mode_rejected_by_schema() -> None:
-    """Asking for taxi mode is now a schema validation error, not a silent fall-through."""
+    """Asking for taxi mode is a schema validation error, not a silent fall-through."""
     registry = build_default_registry()
     ctx = ToolContext(session_id="j-taxi")
     result = await registry.dispatch(
@@ -237,13 +264,12 @@ async def test_plan_journey_taxi_mode_rejected_by_schema() -> None:
         },
         ctx,
     )
-    # Pydantic rejects "taxi" before the handler runs → result is an error status.
     assert result.status != "ok"
 
 
 @pytest.mark.asyncio
 async def test_plan_journey_unwraps_gpt_oss_nested_args() -> None:
-    """v0.4.12: gpt-oss-120b sometimes emits `{"name": "...", "arguments": {...}}`
+    """gpt-oss-120b sometimes emits `{"name": "...", "arguments": {...}}`
     instead of the unwrapped body. The dispatcher must transparently unwrap.
     """
     registry = build_default_registry()
@@ -265,38 +291,10 @@ async def test_plan_journey_unwraps_gpt_oss_nested_args() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_journey_routes_to_disneyland_resort() -> None:
-    """End-to-end: 'Disneyland' alias → Disneyland Resort coords → planner
-    finds DIS station (newly in MTR_STATION_COORDS) within 1500 m.
-
-    Lan Kwai Fong (Central area) → Disneyland should produce an MTR leg
-    via Tung Chung Line + Disneyland Resort Line.
-    """
-    registry = build_default_registry()
-    ctx = ToolContext(session_id="j-disney")
-    result = await registry.dispatch(
-        "transport.plan_journey",
-        {"origin": "Lan Kwai Fong", "destination": "Hong Kong Disneyland"},
-        ctx,
-    )
-    assert result.status == "ok", result.error
-    assert result.result is not None
-    mtr = next(
-        (o for o in result.result["options"] if o["mode"] == "mtr"), None
-    )
-    assert mtr is not None
-    # The planner should find DIS station now that it's in MTR_STATION_COORDS.
-    # Either the destination station is named, or the route uses DRL.
-    summary = mtr.get("mtr_legs_summary") or ""
-    assert summary, f"empty MTR summary, note was: {mtr.get('note')!r}"
-
-
-@pytest.mark.asyncio
 async def test_plan_journey_collision_guard_triggers() -> None:
     """Origin and destination resolving to the exact same MTR station must error."""
     registry = build_default_registry()
     ctx = ToolContext(session_id="j-collision")
-    # Same station name on both sides → exact MTR match returns identical coords.
     result = await registry.dispatch(
         "transport.plan_journey",
         {"origin": "Kowloon Tong", "destination": "Kowloon Tong"},

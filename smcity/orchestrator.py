@@ -162,6 +162,7 @@ class Orchestrator:
                 }
             )
             reply_text = await self._stream_final(messages, req.session_id, _emit)
+            reply_text = _normalise_whitespace(reply_text)
             reply_text = _maybe_polish(reply_text, detection)
             reply_text = _rewrite_source_footer(reply_text, citations)
 
@@ -248,9 +249,11 @@ class Orchestrator:
             messages.append({"role": "system", "content": language_stick_reminder(detection)})
 
             reply_text = await self._stream_final(messages, req.session_id, _emit)
+            reply_text = _normalise_whitespace(reply_text)
             reply_text = _maybe_polish(reply_text, detection)
         else:
             reply_text = first.text or "(empty reply)"
+            reply_text = _normalise_whitespace(reply_text)
             reply_text = _maybe_polish(reply_text, detection)
 
         reply_text = clarification or _rewrite_source_footer(reply_text, citations)
@@ -476,6 +479,25 @@ class Orchestrator:
 
 
 # --- module-level helpers -------------------------------------------------
+
+# Unicode whitespace characters that gpt-oss-120b inserts as "typography
+# flourish" — narrow no-break space (U+202F) between paired words like
+# "Mong Kok", figure space (U+2007), etc. They render as regular spaces in
+# every browser but break naive substring search (`"Mong Kok" in reply`
+# fails) and copy-paste workflows. Normalised to a regular ASCII space in
+# the final reply.
+_UNICODE_SPACE_NORMALISE = str.maketrans({
+    "\u00a0": " ",  # NO-BREAK SPACE
+    "\u202f": " ",  # NARROW NO-BREAK SPACE
+    "\u2007": " ",  # FIGURE SPACE
+    "\u2009": " ",  # THIN SPACE
+    "\u200a": " ",  # HAIR SPACE
+})
+
+
+def _normalise_whitespace(text: str) -> str:
+    """Replace exotic Unicode space characters with ASCII space."""
+    return text.translate(_UNICODE_SPACE_NORMALISE)
 
 
 def _maybe_polish(text: str, detection: LangDetection) -> str:

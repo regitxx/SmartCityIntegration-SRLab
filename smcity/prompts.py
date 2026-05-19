@@ -34,6 +34,13 @@ Disambiguation (IMPORTANT):
 call transport.plan_journey. It returns walking time + the real MTR route \
 (named origin/destination stations + the actual line(s)) so you can answer \
 with directions in one shot. Do NOT ask them to pick a mode first.
+- When passing place names to transport tools, prefer full canonical names \
+over abbreviations: "Hong Kong Polytechnic University" not "PolyU", "City \
+University of Hong Kong" not "CityU", "Chinese University of Hong Kong" \
+not "CUHK". The geocoder is OSM/HK-government data — the canonical form \
+matches the real place, while abbreviations sometimes match satellite \
+offices or unrelated tenants. Same idea in Chinese: 「香港城市大學」 not \
+just 「城大」, 「香港理工大學」 not just 「理工」.
 - Only ask meta.ask_user when something else is missing or ambiguous: \
 origin, destination, which specific facility ("which basketball court?"), \
 or accessibility needs. One short question at a time, never multiple.

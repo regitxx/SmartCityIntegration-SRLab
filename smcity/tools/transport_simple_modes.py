@@ -7,9 +7,9 @@ Two tools live here:
                                      LLM gets every viable option without a
                                      follow-up tool call.
 
-Both share the same free-text geocoder, designed to hit real HKSAR APIs
-first and only fall back to a tiny hand-curated landmark override table
-when a specific upstream is known to fail (currently: Disneyland).
+Both share the same free-text geocoder, designed to hit real public APIs
+first and accept whatever Hong Kong place name the user types — no
+hardcoded per-landmark dict.
 
 Taxi was removed in v0.4.12 — the brand promise of this project is "real
 HK government data", and a distance * tariff calculation isn't that.
@@ -32,151 +32,39 @@ from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
 # ---------------------------------------------------------------------------
 
 _WALK_SPEED_MPS = 1.2  # conservative urban pace with stairs + crowds
+
 # If origin and destination geocode within this many metres of each other we
 # refuse the plan rather than answer "1 min walk" — almost always a sign that
 # the geocoder collided on a common substring (the v0.4.11 PolyU = CityU bug).
 _COLLISION_THRESHOLD_M = 100.0
 
+# OSM Nominatim — primary free-text geocoder. The `viewbox` is the Hong
+# Kong bounding box (left, top, right, bottom) and `bounded=1` clamps
+# results to it; without this, "理工大學" matches Harbin University in
+# mainland China and "Stanley" matches Stanley, Idaho.
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+_HK_VIEWBOX = "113.83,22.56,114.43,22.15"
 
-# ---------------------------------------------------------------------------
-# Landmark coord overrides
-# ---------------------------------------------------------------------------
-# Direct (lat, lng) for landmarks ALS cannot resolve. Multilingual on
-# purpose — the LLM may pass any of EN / Traditional / Simplified. Every
-# entry must have a comment naming the documented ALS failure mode it
-# fixes; speculative entries (i.e. "this might fail one day") do not earn
-# a slot here. Keep this table small.
-
-# Real HK landmark coordinates. Each block documents why ALS alone isn't
-# enough and which queries fail without the override.
-_DISNEYLAND_RESORT: tuple[float, float] = (22.31480, 114.04460)
-_POLYU: tuple[float, float] = (22.30410, 114.17907)  # PolyU main campus, Hung Hom
-_CITYU: tuple[float, float] = (22.33612, 114.17418)  # CityU main campus, Kowloon Tong
-_HKU: tuple[float, float] = (22.28131, 114.14016)  # HKU main campus, Pok Fu Lam
-_CUHK: tuple[float, float] = (22.41940, 114.20680)  # CUHK main campus, Sha Tin
-_HKUST: tuple[float, float] = (22.33670, 114.26730)  # HKUST main campus, Clear Water Bay
-_HKBU: tuple[float, float] = (22.33930, 114.18030)  # HKBU main campus, Kowloon Tong
-_LINGNAN: tuple[float, float] = (22.41850, 113.96980)  # Lingnan U, Tuen Mun
-
-_LANDMARK_COORDS: dict[str, tuple[float, float]] = {
-    # --- Disneyland Resort -----------------------------------------------
-    # ALS returns "Hong Lok Yuen Country Club" (Tai Po) for 迪士尼樂園 and
-    # "Diveria Boulevard, RIVA" (Tuen Mun apartments) for 迪士尼乐园.
-    # Real Hong Kong Disneyland is on Lantau Island.
-    "disneyland": _DISNEYLAND_RESORT,
-    "hong kong disneyland": _DISNEYLAND_RESORT,
-    "hong kong disneyland resort": _DISNEYLAND_RESORT,
-    "hk disneyland": _DISNEYLAND_RESORT,
-    "迪士尼": _DISNEYLAND_RESORT,
-    "迪士尼樂園": _DISNEYLAND_RESORT,
-    "迪士尼乐园": _DISNEYLAND_RESORT,
-    "香港迪士尼": _DISNEYLAND_RESORT,
-    "香港迪士尼樂園": _DISNEYLAND_RESORT,
-    "香港迪士尼乐园": _DISNEYLAND_RESORT,
-    "迪士尼樂園度假區": _DISNEYLAND_RESORT,
-    "迪士尼乐园度假区": _DISNEYLAND_RESORT,
-    # --- PolyU -----------------------------------------------------------
-    # The LLM passes "PolyU" verbatim; ALS returns wrong matches (Sheung
-    # Shui address with "PolyU" in name). The expanded form "Hong Kong
-    # Polytechnic University" works against ALS but we keep all variants
-    # consistent here so we don't depend on which form the LLM chose.
-    "polyu": _POLYU,
-    "poly u": _POLYU,
-    "hk polyu": _POLYU,
-    "hong kong polyu": _POLYU,
-    "hong kong polytechnic university": _POLYU,
-    "the hong kong polytechnic university": _POLYU,
-    "polytechnic university hong kong": _POLYU,
-    "polytechnic university of hong kong": _POLYU,
-    "理工": _POLYU,
-    "理工大學": _POLYU,
-    "理工大学": _POLYU,
-    "香港理工": _POLYU,
-    "香港理工大學": _POLYU,
-    "香港理工大学": _POLYU,
-    # --- CityU -----------------------------------------------------------
-    # Bare "城市大學" without 香港 prefix returns CUHK-area junk from ALS
-    # (~22.43, 114.24). Likewise "CityU" alone confuses ALS.
-    "cityu": _CITYU,
-    "city u": _CITYU,
-    "hk cityu": _CITYU,
-    "hong kong cityu": _CITYU,
-    "city university": _CITYU,
-    "city university of hong kong": _CITYU,
-    "city university hong kong": _CITYU,
-    "城大": _CITYU,
-    "城市大學": _CITYU,
-    "城市大学": _CITYU,
-    "香港城大": _CITYU,
-    "香港城市大學": _CITYU,
-    "香港城市大学": _CITYU,
-    # --- HKU -------------------------------------------------------------
-    # ALS for "HKU" returns the SPACE (continuing-ed) campus in Southern
-    # District, NOT the main campus in Pok Fu Lam.
-    "hku": _HKU,
-    "university of hong kong": _HKU,
-    "the university of hong kong": _HKU,
-    "hong kong university": _HKU,
-    "港大": _HKU,
-    "香港大學": _HKU,
-    "香港大学": _HKU,
-    # --- CUHK ------------------------------------------------------------
-    # The MTR station literally called "University" (UNI) is at the CUHK
-    # campus; for journey planning we want the campus coords (slightly
-    # different from the station coords).
-    "cuhk": _CUHK,
-    "chinese university": _CUHK,
-    "chinese university of hong kong": _CUHK,
-    "the chinese university of hong kong": _CUHK,
-    "中大": _CUHK,
-    "中文大學": _CUHK,
-    "中文大学": _CUHK,
-    "香港中大": _CUHK,
-    "香港中文大學": _CUHK,
-    "香港中文大学": _CUHK,
-    # --- HKUST -----------------------------------------------------------
-    # The Clear Water Bay campus is remote from any MTR station — the
-    # planner will route via the nearest MTR + walking leg.
-    "ust": _HKUST,
-    "hkust": _HKUST,
-    "hong kong ust": _HKUST,
-    "university of science and technology": _HKUST,
-    "hong kong university of science and technology": _HKUST,
-    "the hong kong university of science and technology": _HKUST,
-    "科大": _HKUST,
-    "科技大學": _HKUST,
-    "科技大学": _HKUST,
-    "香港科大": _HKUST,
-    "香港科技大學": _HKUST,
-    "香港科技大学": _HKUST,
-    # --- HKBU ------------------------------------------------------------
-    "hkbu": _HKBU,
-    "baptist u": _HKBU,
-    "baptist university": _HKBU,
-    "hong kong baptist university": _HKBU,
-    "浸大": _HKBU,
-    "浸會大學": _HKBU,
-    "浸会大学": _HKBU,
-    "香港浸會大學": _HKBU,
-    "香港浸会大学": _HKBU,
-    # --- Lingnan ---------------------------------------------------------
-    "lingnan": _LINGNAN,
-    "lingnan u": _LINGNAN,
-    "lingnan university": _LINGNAN,
-    "嶺南大學": _LINGNAN,
-    "岭南大学": _LINGNAN,
-}
-
-
-def _landmark_lookup(query: str) -> tuple[float, float] | None:
-    if not query:
-        return None
-    return _LANDMARK_COORDS.get(query.strip().casefold())
+# Nominatim's usage policy requires a meaningful User-Agent identifying
+# the application. https://operations.osmfoundation.org/policies/nominatim/
+_NOMINATIM_USER_AGENT = (
+    "smcity-agent/0.4.13 (Lab of Social Robotics; HK smart-city assistant)"
+)
 
 
 # ---------------------------------------------------------------------------
 # Geocoder
 # ---------------------------------------------------------------------------
+#
+# Versions up to v0.4.12 carried a hand-maintained dict mapping ~84 specific
+# strings to coordinates for seven universities + Disneyland. That was a
+# patch list — it covered only what we'd tested, and would have failed for
+# the next restaurant, mall, hospital, park, beach, hotel, school, or
+# street a real user asked about. Replaced in v0.4.13 with OSM Nominatim
+# (viewbox-bounded to HK), which has comprehensive Hong Kong coverage in
+# EN / 繁 / 简 from community-edited OSM data and handles the long-tail
+# automatically — no per-landmark Python changes ever needed. ALS remains
+# as a fallback for street-level addresses Nominatim may miss.
 
 
 def _exact_mtr_station_match(query: str) -> tuple[float, float] | None:
@@ -188,9 +76,9 @@ def _exact_mtr_station_match(query: str) -> tuple[float, float] | None:
     `fuzz.WRatio`-based path produced false positives like ``"Polytechnic
     University Hong Kong"`` → MTR "University" station (CUHK), where any
     single-word station name (Central / Airport / Kowloon / HKU / …)
-    appearing as a substring scored ≥78. ALS handles institutional / mall
-    / landmark names correctly; this short-circuit is only for actual
-    station-name queries (``"Kowloon Tong"`` / ``"九龍塘"``).
+    appearing as a substring scored ≥78. The downstream tiers (Nominatim
+    + ALS) handle the rest correctly; this short-circuit is only for
+    queries that ARE a real station name (``"Kowloon Tong"`` / ``"九龍塘"``).
     """
     if not query:
         return None
@@ -210,14 +98,55 @@ def _exact_mtr_station_match(query: str) -> tuple[float, float] | None:
     return None
 
 
-async def _geocode_via_als(query: str) -> tuple[float, float] | None:
-    """ALS (Address Lookup Service, www.als.gov.hk) — primary geocoder.
+async def _geocode_via_nominatim(query: str) -> tuple[float, float] | None:
+    """OSM Nominatim, bounded to the HK viewbox, picking the
+    highest-importance candidate from the top 5 results.
 
-    Sends ``Accept-Language: zh-Hant,zh-Hans,en`` so the upstream picks the
-    most permissive interpretation of the query; coordinates are language-
-    independent so the returned (lat, lng) is the same regardless of which
-    language matched. Free-form queries (Chinese or English) work — the
-    URL-encoder in httpx handles the wire-format.
+    Why Nominatim (rather than ALS-only): OSM has comprehensive
+    Hong Kong coverage including landmarks, restaurants, malls, temples,
+    parks, suburbs, MTR exits, schools, hospitals — anything tagged with
+    a `name` / `name:en` / `name:zh-Hant` / `name:zh-Hans` in OSM. The
+    `viewbox` + `bounded=1` combo clamps results to HK so we never get
+    cross-border collisions (e.g. "理工大學" → Harbin Institute of
+    Technology, "Stanley" → Stanley, Idaho).
+
+    Why pick by `importance` rather than first result: viewbox-bounded
+    queries don't guarantee an importance-sorted response, and the most
+    prominent place is almost always what the user means (`Times Square`
+    the Causeway Bay landmark over an obscure street with `times` in its
+    name).
+    """
+    if not query:
+        return None
+    params = {
+        "q": query,
+        "format": "json",
+        "limit": "5",
+        "viewbox": _HK_VIEWBOX,
+        "bounded": "1",
+        "accept-language": "en,zh-Hant,zh-Hans",
+    }
+    headers = {"User-Agent": _NOMINATIM_USER_AGENT}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as h:
+            r = await h.get(NOMINATIM_URL, params=params, headers=headers)
+            r.raise_for_status()
+            results = r.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    if not isinstance(results, list) or not results:
+        return None
+    try:
+        best = max(results, key=lambda e: float(e.get("importance", 0) or 0))
+        return float(best["lat"]), float(best["lon"])
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+async def _geocode_via_als(query: str) -> tuple[float, float] | None:
+    """ALS (Address Lookup Service, www.als.gov.hk) — Lands Department's
+    official HK address geocoder. Best for street-level addresses /
+    estate-and-block / building numbers that Nominatim may not have.
 
     Schema (verified 2026-05-19 against the live endpoint)::
 
@@ -265,24 +194,27 @@ async def _geocode_one(query: str) -> tuple[float, float] | None:
     Resolution order — each tier is hit only if the previous returned
     ``None``:
 
-      1. **Landmark override** — multilingual table of known ALS failures.
-         Currently just Disneyland (cf. ``_LANDMARK_COORDS``).
-      2. **Exact MTR station match** — case-insensitive, multilingual,
+      1. **Exact MTR station match** — case-insensitive, multilingual,
          no fuzz. Routes ``"Kowloon Tong"`` / ``"九龍塘"`` straight to
-         station coords for high-precision routing.
-      3. **ALS** — Lands Department Address Lookup. Handles institutions,
-         streets, malls, estates, buildings, in EN / 繁 / 简.
+         station coords for high-precision routing. Cheapest tier
+         (in-memory dict lookup), deterministic.
+      2. **OSM Nominatim** with HK viewbox — comprehensive landmarks,
+         POIs, restaurants, malls, suburbs, temples, parks, etc. in
+         EN / 繁 / 简. Picks the highest-importance candidate.
+      3. **ALS** — Lands Department's official address service.
+         Catches street-level addresses (`11 Yuk Choi Road`,
+         `Block 5 Whampoa Estate`) Nominatim may not have.
 
     Returns ``None`` if every tier declined.
     """
     if not query:
         return None
-    landmark = _landmark_lookup(query)
-    if landmark:
-        return landmark
     mtr = _exact_mtr_station_match(query)
     if mtr:
         return mtr
+    nominatim = await _geocode_via_nominatim(query)
+    if nominatim:
+        return nominatim
     return await _geocode_via_als(query)
 
 
@@ -410,15 +342,16 @@ PLAN_WALKING_TOOL: ToolSpec[PlanWalkingArgs, PlanWalkingResult] = ToolSpec(
     description_en=(
         "Estimate walking distance + duration between two points in Hong Kong. "
         "Accepts origin + destination either as free-text names (geocoded via "
-        "ALS) or as explicit lat/lng pairs. Assumes 1.2 m/s HK-urban walking "
-        "pace. Use for 'how far / long is it to walk from X to Y?' queries — "
-        "do NOT use transport.plan_simple_route (that's MTR-only)."
+        "OSM Nominatim with an ALS fallback) or as explicit lat/lng pairs. "
+        "Assumes 1.2 m/s HK-urban walking pace. Use for 'how far / long is it "
+        "to walk from X to Y?' queries — do NOT use transport.plan_simple_route "
+        "(that's MTR-only)."
     ),
     args_schema=PlanWalkingArgs,
     result_schema=PlanWalkingResult,
     handler=_walking_handler,
     ttl_seconds=60 * 60,
-    budget_ms=1500,
+    budget_ms=2500,
     upstream_langs=frozenset({"en", "zh-Hant"}),
     upstream="smcity.planner",
 )
@@ -627,13 +560,13 @@ PLAN_JOURNEY_TOOL: ToolSpec[PlanJourneyArgs, PlanJourneyResult] = ToolSpec(
         "without specifying a mode — it returns the walking time and the real "
         "MTR route (origin station + lines + destination station) so you can "
         "answer with directions in one shot. Accepts free-text names (geocoded "
-        "via ALS) or lat/lng pairs."
+        "via OSM Nominatim + ALS) or lat/lng pairs."
     ),
     args_schema=PlanJourneyArgs,
     result_schema=PlanJourneyResult,
     handler=_journey_handler,
     ttl_seconds=60 * 60,
-    budget_ms=2500,
+    budget_ms=3500,
     upstream_langs=frozenset({"en", "zh-Hant"}),
     upstream="smcity.planner",
 )
