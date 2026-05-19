@@ -2,6 +2,38 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.11] — 2026-05-19
+
+**Mac Studio deploy pack.** The Macbook-hosted Funnel breaks every time the laptop sleeps; demo URL has to live on the always-on Mac Studio. Adds a two-container deploy (agent + Tailscale sidecar) following Tesfa's reference compose pattern.
+
+### New files
+
+- **`Dockerfile`** — two-stage build (deps in `/opt/venv`, source at `/app` to preserve the repo's relative-path data lookups). Multi-arch via `python:3.12-slim`. Non-root user (`smcity:10001`). Healthcheck via stdlib `urllib.request` (no curl needed). The naïve "install as a wheel" approach would have broken `Path(__file__).parent.parent.parent / "data"` resolutions for `mtr_stations.json` / `mtr_lines.json` / `hkha_name_map_tc.json` — caught + fixed before commit.
+- **`deploy/docker-compose.yml`** — two services on a shared bridge network:
+  - `smcity-agent`: builds from this repo. Reaches LM Studio on the Mac Studio host via `host.docker.internal:1234` (Docker Desktop for Mac built-in). Persists session DB to a named volume.
+  - `smcity-tailscale`: official `tailscale/tailscale:latest` sidecar in userspace mode. Auth-key via `.env`. Joins the Earnest Design Lab tailnet as `smcity`, terminates HTTPS with auto-issued Let's Encrypt cert.
+  - `depends_on: smcity-agent { condition: service_healthy }` so the sidecar doesn't expose the URL until the agent is actually serving.
+- **`deploy/serveconfig.json`** — Tailscale Serve config. `${TS_CERT_DOMAIN}` is auto-resolved by the sidecar; proxies `:443 → http://smcity-agent:8080` over the bridge network. `AllowFunnel: false` by default (tailnet-only); flip to `true` for public exposure after enabling Funnel on the tailnet.
+- **`deploy/.env.example`** — slot for `TS_AUTHKEY` + optional `TS_HOSTNAME`. Real `deploy/.env` is gitignored.
+- **`deploy/README.md`** — full Mac Studio walkthrough: prereqs, one-time setup, smoke tests, boss-sharing paths (tailnet member vs Funnel public), operating commands, troubleshooting table, remote model-load instructions when `gpt-oss-120b` isn't loaded.
+- **`.dockerignore`** — keeps the build context lean (no .venv, no logs, no tests, no docs, no handoff/, no secrets).
+
+### .gitignore
+
+Added `deploy/.env` to the ignore set so the auth key never gets committed.
+
+### Migration path
+
+1. On the Mac Studio: `git clone ... && cd smcity/deploy && cp .env.example .env`
+2. Paste the Tailscale auth key into `.env`
+3. `docker compose up -d --build`
+4. Look in `docker compose logs smcity-tailscale` for the new URL (e.g. `https://smcity.taila366aa.ts.net/`)
+5. Tear down the laptop's Funnel (`sudo tailscale funnel reset`) — Mac Studio is now the demo host
+
+### Gate
+
+Compose syntax validated (`docker compose -f deploy/docker-compose.yml config --quiet` passes). Image build deferred to the Mac Studio.
+
 ## [0.4.10] — 2026-05-19
 
 **Three bugs the boss caught in 30 seconds of live testing. All fixed.**

@@ -1,0 +1,92 @@
+# smcity — Mac Studio production deploy.
+#
+# Two services on a shared bridge network:
+#   smcity-agent     : the FastAPI agent (this repo, built from ../Dockerfile)
+#   smcity-tailscale : Tailscale sidecar that terminates HTTPS and proxies
+#                      to the agent over the bridge. Joins the Earnest Design
+#                      Lab tailnet (taila366aa) as a new node "smcity".
+#
+# The agent reaches LM Studio (running on the Mac Studio host, NOT in Docker)
+# via host.docker.internal:1234 — this works out of the box on Docker Desktop
+# for Mac. The TS sidecar uses userspace networking so it doesn't need root
+# access on macOS.
+#
+# Usage:
+#   1. cp .env.example .env  and paste your TS auth key into TS_AUTHKEY
+#   2. docker compose up -d --build
+#   3. tail logs: docker compose logs -f
+#   4. agent URL appears in the sidecar logs once it joins the tailnet
+
+services:
+
+  smcity-agent:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: smcity:0.4.10
+    container_name: smcity-agent
+    restart: unless-stopped
+    # Talk to LM Studio on the host (Mac Studio). Docker Desktop for Mac
+    # resolves host.docker.internal to the host's IP automatically.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      LLM_BASE_URL: http://host.docker.internal:1234/v1
+      LLM_MODEL: openai/gpt-oss-120b
+      LLM_TIMEOUT_S: "120"
+      LOG_LEVEL: INFO
+      # WebSocket origin allow-list. The Tailscale-proxied hostname needs to
+      # be here OR set to "*" to accept any. Default: same-origin only, which
+      # works once the sidecar fronts everything.
+      WS_ALLOWED_ORIGINS: "*"
+      # Session rate limiter (per session_id). Tune for boss-demo traffic.
+      RATE_PER_MIN: "60"
+      RATE_BURST: "20"
+    # Persist the session DB across container restarts.
+    volumes:
+      - smcity-sessions:/app/data
+    networks:
+      - smcity-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; r=urllib.request.urlopen('http://localhost:8080/health', timeout=5); sys.exit(0 if r.status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+  smcity-tailscale:
+    image: tailscale/tailscale:latest
+    container_name: smcity-tailscale
+    restart: unless-stopped
+    cap_add:
+      - net_admin
+      - net_raw
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # Provided via .env — never bake into the image.
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env}
+      TS_HOSTNAME: ${TS_HOSTNAME:-smcity}
+      TS_USERSPACE: "true"
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SOCKET: /tmp/tailscaled.sock
+      TS_SERVE_CONFIG: /config/serveconfig.json
+      # If you later flip Funnel on for public HTTPS, add TS_EXTRA_ARGS:
+      #   TS_EXTRA_ARGS: "--accept-routes"
+    volumes:
+      - smcity-ts-state:/var/lib/tailscale
+      - ./serveconfig.json:/config/serveconfig.json:ro
+    hostname: smcity
+    depends_on:
+      smcity-agent:
+        condition: service_healthy
+    networks:
+      - smcity-net
+
+volumes:
+  smcity-sessions:
+  smcity-ts-state:
+
+networks:
+  smcity-net:
+    driver: bridge

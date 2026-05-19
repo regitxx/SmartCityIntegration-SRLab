@@ -1,0 +1,57 @@
+# Build context hygiene — keep the image lean and avoid leaking dev state.
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Python build / caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.uv/
+
+# Local-only state that should never enter the image
+data/sessions.sqlite3*
+logs/
+traces/
+handoff/
+
+# IDE / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+~$*
+
+# Docs + tests don't need to ship with the runtime image
+tests/
+docs/
+otp/
+
+# Office lock files
+~$*
+
+# Local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# The deploy dir contains the docker-compose itself + the auth key — we
+# never want to bake it into the image.
+deploy/
