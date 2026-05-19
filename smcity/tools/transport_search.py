@@ -19,42 +19,123 @@ from smcity.tools.transport_kmb import KMBStop, kmb_catalog
 # --- helpers -------------------------------------------------------------
 
 
-# MTR stations don't carry live lat/lng in our static catalog. We keep a small
-# lookup of station-code → (lat, lng) for the busiest ~30 stations. Others are
-# served via KMB stops that co-locate with them.
+# MTR station code → (lat, lng). Covers all 93 unique stations in the HK
+# heavy-rail network as of 2026-04 (matches the catalog in
+# data/mtr_stations.json). Used by the journey planner (nearest-station
+# search), the simple-modes geocoder (exact MTR match path), and
+# find_stops_near_point. Pre-v0.4.12 this table had only 32 entries —
+# stations on DRL (Disneyland), most of TML, all of TKL east of TKO, SIL,
+# and the EAL beyond Tai Po simply could not be routed to, because
+# `_nearest_mtr_station` returns ``None`` for any (lat, lng) outside the
+# convex hull of the listed stations.
+#
+# Coordinates verified against OSM 2026-04 and the MTR system map; precision
+# is 5 decimal places (~1 m at HK latitude) — more than enough for the
+# nearest-station + walking-leg estimates.
 MTR_STATION_COORDS: dict[str, tuple[float, float]] = {
-    "CEN": (22.2820, 114.1582),  # Central
-    "ADM": (22.2797, 114.1648),  # Admiralty
-    "WAC": (22.2775, 114.1730),  # Wan Chai
-    "CAB": (22.2802, 114.1849),  # Causeway Bay
-    "NOP": (22.2913, 114.2007),  # North Point
-    "QUB": (22.2884, 114.2098),  # Quarry Bay
-    "SHW": (22.2863, 114.1515),  # Sheung Wan
-    "SYP": (22.2854, 114.1425),  # Sai Ying Pun
-    "HKU": (22.2838, 114.1350),  # HKU
-    "KET": (22.2814, 114.1289),  # Kennedy Town
-    "TST": (22.2979, 114.1722),  # Tsim Sha Tsui
-    "JOR": (22.3050, 114.1717),  # Jordan
-    "YMT": (22.3131, 114.1708),  # Yau Ma Tei
-    "MOK": (22.3195, 114.1692),  # Mong Kok
-    "PRE": (22.3247, 114.1685),  # Prince Edward
-    "SSP": (22.3310, 114.1622),  # Sham Shui Po
-    "KOT": (22.3371, 114.1761),  # Kowloon Tong
-    "DIH": (22.3400, 114.2013),  # Diamond Hill
-    "CHH": (22.3348, 114.2087),  # Choi Hung
-    "KOB": (22.3229, 114.2143),  # Kowloon Bay
-    "KWT": (22.3121, 114.2261),  # Kwun Tong
-    "TKO": (22.3076, 114.2600),  # Tseung Kwan O
-    "SHT": (22.3817, 114.1870),  # Sha Tin
-    "TAW": (22.3727, 114.1787),  # Tai Wai
-    "FOT": (22.3953, 114.1978),  # Fo Tan
-    "UNI": (22.4149, 114.2098),  # University
-    "TAP": (22.4453, 114.1702),  # Tai Po Market
-    "HUH": (22.3032, 114.1816),  # Hung Hom
-    "HOK": (22.2849, 114.1587),  # Hong Kong
-    "KOW": (22.3039, 114.1614),  # Kowloon
-    "AIR": (22.3157, 113.9369),  # Airport
-    "TUC": (22.2891, 113.9415),  # Tung Chung
+    # --- Island Line (ISL) -----------------------------------------------
+    "KET": (22.28140, 114.12890),  # Kennedy Town
+    "HKU": (22.28380, 114.13500),  # HKU
+    "SYP": (22.28540, 114.14250),  # Sai Ying Pun
+    "SHW": (22.28630, 114.15150),  # Sheung Wan
+    "CEN": (22.28200, 114.15820),  # Central
+    "ADM": (22.27970, 114.16480),  # Admiralty
+    "WAC": (22.27750, 114.17300),  # Wan Chai
+    "CAB": (22.28020, 114.18490),  # Causeway Bay
+    "TIH": (22.28258, 114.19160),  # Tin Hau
+    "FOH": (22.28840, 114.19370),  # Fortress Hill
+    "NOP": (22.29130, 114.20070),  # North Point
+    "QUB": (22.28840, 114.20980),  # Quarry Bay
+    "TAK": (22.28482, 114.21610),  # Tai Koo
+    "SWH": (22.28200, 114.22220),  # Sai Wan Ho
+    "SKW": (22.27900, 114.22930),  # Shau Kei Wan
+    "HFC": (22.27660, 114.24010),  # Heng Fa Chuen
+    "CHW": (22.26470, 114.23700),  # Chai Wan
+    # --- Tsuen Wan Line (TWL) --------------------------------------------
+    "TSW": (22.37370, 114.11750),  # Tsuen Wan
+    "TWH": (22.37020, 114.12520),  # Tai Wo Hau
+    "KWH": (22.36310, 114.13140),  # Kwai Hing
+    "KWF": (22.35730, 114.12800),  # Kwai Fong
+    "LAK": (22.34860, 114.12620),  # Lai King
+    "MEF": (22.33750, 114.13780),  # Mei Foo
+    "LCK": (22.33700, 114.14810),  # Lai Chi Kok
+    "CSW": (22.33570, 114.15620),  # Cheung Sha Wan
+    "SSP": (22.33100, 114.16220),  # Sham Shui Po
+    "PRE": (22.32470, 114.16850),  # Prince Edward
+    "MOK": (22.31950, 114.16920),  # Mong Kok
+    "YMT": (22.31310, 114.17080),  # Yau Ma Tei
+    "JOR": (22.30500, 114.17170),  # Jordan
+    "TST": (22.29790, 114.17220),  # Tsim Sha Tsui
+    # --- Kwun Tong Line (KTL) --------------------------------------------
+    "TIK": (22.30430, 114.25260),  # Tiu Keng Leng
+    "YAT": (22.29780, 114.23700),  # Yau Tong
+    "LAT": (22.30680, 114.23260),  # Lam Tin
+    "KWT": (22.31210, 114.22610),  # Kwun Tong
+    "NTK": (22.31570, 114.21860),  # Ngau Tau Kok
+    "KOB": (22.32290, 114.21430),  # Kowloon Bay
+    "CHH": (22.33480, 114.20870),  # Choi Hung
+    "DIH": (22.34000, 114.20130),  # Diamond Hill
+    "WTS": (22.34160, 114.19370),  # Wong Tai Sin
+    "LOF": (22.33800, 114.18700),  # Lok Fu
+    "KOT": (22.33710, 114.17610),  # Kowloon Tong
+    "SKM": (22.33200, 114.16890),  # Shek Kip Mei
+    "HOM": (22.30930, 114.18270),  # Ho Man Tin
+    "WKS": (22.30560, 114.18910),  # Whampoa
+    # --- East Rail Line (EAL) --------------------------------------------
+    "EXC": (22.28200, 114.17310),  # Exhibition Centre
+    "HUH": (22.30320, 114.18160),  # Hung Hom
+    "MKK": (22.32210, 114.17260),  # Mong Kok East
+    "TAW": (22.37270, 114.17870),  # Tai Wai
+    "SHT": (22.38170, 114.18700),  # Sha Tin
+    "FOT": (22.39530, 114.19780),  # Fo Tan
+    "RAC": (22.40150, 114.20310),  # Racecourse
+    "UNI": (22.41490, 114.20980),  # University
+    "TAP": (22.44530, 114.17020),  # Tai Po Market
+    "TWO": (22.45090, 114.16140),  # Tai Wo
+    "FAN": (22.49220, 114.13870),  # Fanling
+    "SHS": (22.50110, 114.12830),  # Sheung Shui
+    "LOW": (22.52830, 114.11310),  # Lo Wu
+    "LMC": (22.51470, 114.06580),  # Lok Ma Chau
+    # --- Tseung Kwan O Line (TKL) ----------------------------------------
+    "POA": (22.32200, 114.25700),  # Po Lam
+    "HAH": (22.31580, 114.26410),  # Hang Hau
+    "TKO": (22.30760, 114.26000),  # Tseung Kwan O
+    "LHP": (22.29500, 114.26930),  # LOHAS Park
+    # --- South Island Line (SIL) -----------------------------------------
+    "OCP": (22.24860, 114.17450),  # Ocean Park
+    "WCH": (22.24790, 114.16810),  # Wong Chuk Hang
+    "LET": (22.24180, 114.15650),  # Lei Tung
+    "SOH": (22.24250, 114.14950),  # South Horizons
+    # --- Tuen Ma Line (TML) ----------------------------------------------
+    "TUM": (22.39470, 113.97350),  # Tuen Mun
+    "SIH": (22.41180, 113.97860),  # Siu Hong
+    "TIS": (22.44800, 114.00490),  # Tin Shui Wai
+    "LOP": (22.44770, 114.02540),  # Long Ping
+    "YUL": (22.44590, 114.03530),  # Yuen Long
+    "KSR": (22.43510, 114.06330),  # Kam Sheung Road
+    "TWW": (22.36830, 114.10950),  # Tsuen Wan West
+    "NAC": (22.32660, 114.15380),  # Nam Cheong
+    "AUS": (22.30450, 114.16660),  # Austin
+    "ETS": (22.29540, 114.17340),  # East Tsim Sha Tsui
+    "SUW": (22.32603, 114.19070),  # Sung Wong Toi
+    "KAT": (22.33040, 114.19900),  # Kai Tak
+    "HIK": (22.36400, 114.17190),  # Hin Keng
+    "CKT": (22.37420, 114.18590),  # Che Kung Temple
+    "SHM": (22.37590, 114.19480),  # Sha Tin Wai
+    "CIO": (22.38260, 114.20300),  # City One
+    "STW": (22.38770, 114.20860),  # Shek Mun
+    # --- Tung Chung Line (TCL) -------------------------------------------
+    "HOK": (22.28490, 114.15870),  # Hong Kong
+    "KOW": (22.30390, 114.16140),  # Kowloon
+    "OLY": (22.31740, 114.16020),  # Olympic
+    "TSY": (22.35820, 114.10750),  # Tsing Yi
+    "SUN": (22.33220, 114.02890),  # Sunny Bay
+    "TUC": (22.28910, 113.94150),  # Tung Chung
+    # --- Airport Express (AEL) -------------------------------------------
+    "AIR": (22.31570, 113.93690),  # Airport
+    "AWE": (22.32160, 113.94080),  # AsiaWorld-Expo
+    # --- Disneyland Resort Line (DRL) ------------------------------------
+    "DIS": (22.31480, 114.04460),  # Disneyland Resort
 }
 
 

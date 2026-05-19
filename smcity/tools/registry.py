@@ -165,6 +165,16 @@ class ToolRegistry:
     async def dispatch(self, name: str, raw_args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         started = time.perf_counter()
         spec = self.get(name)
+        # gpt-oss-120b sometimes double-wraps tool args in the OpenAI
+        # function-call envelope: `{"name": "...", "arguments": {...}}`
+        # instead of the unwrapped `{...}` body. Detected live in v0.4.12.
+        # Unwrap defensively when the shape is unambiguous.
+        if (
+            isinstance(raw_args, dict)
+            and set(raw_args.keys()) == {"name", "arguments"}
+            and isinstance(raw_args.get("arguments"), dict)
+        ):
+            raw_args = raw_args["arguments"]
         try:
             args = spec.args_schema.model_validate(raw_args)
         except Exception as err:

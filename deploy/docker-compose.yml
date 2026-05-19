@@ -23,7 +23,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: smcity:0.4.10
+    image: smcity:0.4.12
     container_name: smcity-agent
     restart: unless-stopped
     # Talk to LM Studio on the host (Mac Studio). Docker Desktop for Mac

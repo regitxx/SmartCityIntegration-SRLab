@@ -65,9 +65,8 @@ TOPICS: tuple[DatasetTopic, ...] = (
             "transport.plan_journey",
             "transport.plan_simple_route",
             "transport.plan_walking_route",
-            "transport.plan_taxi_estimate",
         ),
-        description_en="Get from A to B by MTR / bus / walk / taxi; user may not specify mode.",
+        description_en="Get from A to B by MTR / bus / walk; user may not specify mode.",
     ),
     DatasetTopic(
         id="stops_near_me",

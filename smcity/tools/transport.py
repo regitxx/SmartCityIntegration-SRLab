@@ -36,9 +36,22 @@ def _load_stations() -> list[MTRStation]:
 
 
 def resolve_mtr_station(name: str) -> MTRStation | None:
-    """Fuzzy-match a station name (EN / 繁體 / 简体) to a single station.
+    """Match a station name (EN / 繁體 / 简体) to a single station.
 
-    Returns the best fuzzy match when the score clears a conservative threshold.
+    Two-pass strategy:
+
+      1. **Exact match** (case-insensitive) against every language variant —
+         deterministic, sub-millisecond, handles the 99% case of the LLM
+         passing a real station name verbatim.
+      2. **`token_sort_ratio` fuzzy match** at cutoff 85 — tolerant of
+         word reordering and minor typos but, crucially, NOT of substring
+         matches. The previous `fuzz.WRatio` matcher scored
+         ``"Polytechnic University Hong Kong"`` against the MTR
+         ``"University"`` station at 90 because of `partial_ratio` weighting,
+         producing the v0.4.11 PolyU = CityU = (22.4149, 114.2098) bug.
+         `token_sort_ratio` scores that pair at 47 (well below cutoff) while
+         keeping legitimate near-matches like ``"kowloon tong"`` → ``"Kowloon
+         Tong"`` at 83.
     """
     stations = _load_stations()
     candidates: list[tuple[str, MTRStation]] = []
@@ -47,8 +60,15 @@ def resolve_mtr_station(name: str) -> MTRStation | None:
             candidates.append((n, st))
             candidates.append((n.lower(), st))
 
+    target = name.strip().casefold()
+    for label, station in candidates:
+        if label.strip().casefold() == target:
+            return station
+
     names_only = [c[0] for c in candidates]
-    match = process.extractOne(name, names_only, scorer=fuzz.WRatio, score_cutoff=78)
+    match = process.extractOne(
+        name, names_only, scorer=fuzz.token_sort_ratio, score_cutoff=85
+    )
     if match is None:
         return None
     return candidates[match[2]][1]

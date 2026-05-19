@@ -2,6 +2,94 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.12] — 2026-05-19
+
+**Geocoder rewrite + taxi removal.** A live boss-demo query — "Im in polyu how do I get to cityu" — returned "just walk, it's 1 minute away". Root cause: `fuzz.WRatio` in `resolve_mtr_station` scored *"Polytechnic University Hong Kong"* against MTR station *"University"* (CUHK at Sha Tin) at 90, while substring-matching any single-word station name (Central / Airport / Kowloon / HKU / …) appearing anywhere in the query. Both PolyU and CityU collapsed to the *same* wrong point (22.4149, 114.2098), so the planner truthfully returned "0 m walk, 1 min" — looking plausible while being completely wrong.
+
+This release replaces the speculative fuzzy short-circuit with a strict three-tier geocoder backed by **real HKSAR APIs first**, and removes taxi as a supported mode entirely (per repeated user feedback: the brand promise is "smart-city data via HK gov APIs" — distance × tariff arithmetic is not that).
+
+### Geocoder (smcity/tools/transport_simple_modes.py)
+
+New resolution order, each tier hit only if the previous returned `None`:
+
+1. **Landmark override (multilingual)** — direct (lat, lng) coords for landmarks ALS provably can't resolve. Currently just Disneyland (verified failure: ALS returns "Hong Lok Yuen Country Club" for 迪士尼樂園 and "Diveria Boulevard" apartments for 迪士尼乐园). 12 keys covering EN + Traditional + Simplified all map to the real Disneyland Resort coords (22.31480, 114.04460). Speculative entries don't earn a slot — every entry has a comment naming the documented ALS failure mode.
+2. **Exact MTR station match (multilingual, no fuzz)** — case-insensitive equality against every language variant. Handles `"Kowloon Tong"` / `"九龍塘"` / `"九龙塘"` → station coords directly. Does NOT fuzzy-match: `_exact_mtr_station_match("Polytechnic University Hong Kong")` returns `None` instead of falsely binding to "University" station.
+3. **ALS with `Accept-Language: zh-Hant,zh-Hans,en`** — primary geocoder. Confirmed working against the live endpoint for PolyU, CityU, Lan Kwai Fong, Times Square, Wong Tai Sin, Festival Walk, Mong Kok, Tsim Sha Tsui, both EN and ZH-Hant/Hans inputs.
+
+Fuzzy MTR matching is **gone from the geocoder path**. If a misspelled station name reaches us, ALS still has a fair shot via its own address fuzziness; if we ever need typo-tolerance on station inputs we'll add it back with evidence, not speculation.
+
+### Collision guard
+
+`_resolve_pair` now raises `ToolUpstreamError` when origin and destination resolve within 100 m of each other. Previously the planner happily returned "0 m walk, 1 min" — a plausible-looking lie that hid the underlying geocoder collision. Now the agent must surface the error and re-ask the user.
+
+### Taxi removed
+
+- `PLAN_TAXI_TOOL` unregistered from `build_default_registry`.
+- Taxi mode + handler code deleted from `transport_simple_modes.py` (`_TAXI_*` constants, `_taxi_fare_hkd`, `PlanTaxiArgs/Result`, `_taxi_handler`, `PLAN_TAXI_TOOL`).
+- `_JourneyMode = Literal["walk", "mtr"]` (was `Literal["walk", "mtr", "taxi"]`). Pydantic now rejects `modes=["taxi"]` at schema validation; planner cannot emit taxi options under any path.
+- `transport.plan_taxi_estimate` removed from `langrouter/coverage.py`.
+- Prompt rewritten: `Taxi is NOT a supported mode — never volunteer taxi fares, taxi durations, or "you could also take a taxi"`. The "Or walk ~X min / taxi ~Y min" closing-line guidance is now "Or walk ~X min." only.
+- `smcity_fuzz.datasets` journey_planning topic drops `transport.plan_taxi_estimate` from `expected_tools`.
+
+### `resolve_mtr_station` (smcity/tools/transport.py)
+
+Still used by `transport.get_mtr_next_trains` — that tool legitimately needs fuzziness for the station-name argument. Tightened to:
+1. Exact case-insensitive match first.
+2. `fuzz.token_sort_ratio` cutoff 85 if exact fails.
+
+`token_sort_ratio` scores `"Polytechnic University Hong Kong"` vs `"University"` at 47 (rejected) while keeping legitimate near-matches like `"kowloon tong"` → `"Kowloon Tong"` at 83 (passes the still-existing per-tier exact check anyway).
+
+### Tests
+
+`tests/test_simple_modes.py` rewritten:
+- New `test_landmark_lookup_disneyland_multilingual` pinning all 12 language variants.
+- `test_exact_mtr_station_match_*` covering English exact, Traditional Chinese exact, and the explicit no-false-positive guard for "Polytechnic University Hong Kong" / "City University of Hong Kong".
+- `test_geocode_one_prefers_landmark_override` and `test_geocode_one_prefers_exact_mtr_over_als` use `respx` to assert ALS is NOT hit when an earlier tier resolves.
+- `test_geocode_one_falls_through_to_als` mocks the ALS response with the real-schema PolyU result and asserts coords land in Hung Hom (22.29 < lat < 22.32), NOT the Sha Tin University-station coords (22.41) the old code produced.
+- `test_plan_journey_returns_walk_and_mtr_only` replaces the old three-mode assertion.
+- New `test_plan_journey_taxi_mode_rejected_by_schema` confirms `modes=["taxi"]` is now a pydantic validation error.
+- New `test_plan_journey_collision_guard_triggers` confirms "Kowloon Tong" on both sides errors out.
+- Deleted `_taxi_fare_hkd` fare-formula test (the function no longer exists).
+
+`tests/test_response_quality.py`:
+- `test_system_prompt_has_per_mode_routing_table` updated — no longer asserts on `plan_taxi_estimate` / `的士`. Adds positive assertions on `get_kmb_eta` / `get_citybus_eta`.
+- New `test_system_prompt_forbids_taxi_mode` pinning the "Taxi is NOT a supported mode" directive.
+
+### MTR_STATION_COORDS expanded 32 → 93
+
+`smcity/tools/transport_search.py`'s coord table was a hand-curated subset of "the busiest 30 stations". Discovered live: planning to **Hong Kong Disneyland Resort** ran the geocoder correctly to (22.3148, 114.0446), but `_nearest_mtr_station` returned "no MTR station within 1500 m" because **DIS wasn't in the table at all** — same situation for everything on DRL, most of TML, all of TKL east of TKO, all of SIL, and most of TWL. Rewrote the table to cover all 93 unique station codes in `data/mtr_stations.json`, organised by line, coords from OSM / MTR system map (5 dp precision). Now any (lat, lng) within walking distance of *any* HK heavy-rail station gets a real route.
+
+### Multilingual university aliases
+
+Live battery surfaced that the LLM passes abbreviations verbatim — `"PolyU"`, `"CityU"`, `"理工"`, `"城市大學"` — and ALS doesn't reliably resolve them (e.g. bare `"PolyU"` returns a Fanling address; `"城市大學"` without `"香港"` returns CUHK-area coords). Expanded `_LANDMARK_COORDS` from 12 → 84 entries covering PolyU / CityU / HKU / CUHK / HKUST / HKBU / Lingnan in:
+- English: abbreviation (`polyu`), spaced (`poly u`), with-prefix (`hk polyu`), expanded (`Hong Kong Polytechnic University`).
+- Traditional Chinese: short (`理工`), formal (`理工大學`), with prefix (`香港理工大學`).
+- Simplified Chinese: formal (`理工大学`), with prefix (`香港理工大学`).
+
+Each campus block has a comment naming the ALS failure mode it fixes. Coords are the actual main-campus locations (verified against the live ALS response for the expanded English form, except where ALS fails — then sourced from OSM).
+
+### `gpt-oss-120b` nested-args envelope unwrap
+
+`ToolRegistry.dispatch` now defensively unwraps `{"name": "...", "arguments": {...}}` when the LLM double-wraps a tool call. Saw this live: `transport.plan_journey` got args `{"name": "transport_plan_journey", "arguments": {"origin": "City University of Hong Kong", "destination": "Hong Kong Polytechnic University"}}` — pydantic validation failed because the fields aren't `name`/`arguments`. The unwrap only fires when the dict has *exactly* those two keys and `arguments` is itself a dict, so legitimate calls with `name=` or `arguments=` fields (none exist today) wouldn't be silently mangled.
+
+### Additional tests
+
+- `test_landmark_lookup_universities_multilingual` — covers PolyU/CityU/HKU/CUHK/HKUST/HKBU in EN + 繁 + 简, 6 universities × 4-6 variants each.
+- `test_plan_journey_unwraps_gpt_oss_nested_args` — proves the dispatch unwraps the nested envelope.
+- `test_plan_journey_routes_to_disneyland_resort` — end-to-end: `"Hong Kong Disneyland"` → landmark coords → DIS station → real MTR route with non-empty `mtr_legs_summary`.
+
+### Live verification
+
+Battery of 10 EN + 5 ZH-Hant + 3 ZH-Hans queries against the Mac Studio deploy. The previously-broken cases:
+
+- `Im in polyu how do I get to cityu` → East Rail Line via Hung Hom + Kowloon Tong (was: "1 min walk")
+- `Hong Kong Disneyland → Lan Kwai Fong` → Tung Chung + Disneyland Resort line (was: "540 m walk")
+- `理工大學 → 城市大學` → East Rail Line (was: same wrong-coords collision)
+
+### Migration
+
+Docker rebuild required (`docker compose up -d --build` on Mac Studio). Image tag bumped to `smcity:0.4.12`.
+
 ## [0.4.11] — 2026-05-19
 
 **Mac Studio deploy pack.** The Macbook-hosted Funnel breaks every time the laptop sleeps; demo URL has to live on the always-on Mac Studio. Adds a two-container deploy (agent + Tailscale sidecar) following Tesfa's reference compose pattern.

@@ -25,7 +25,6 @@ from smcity.tools.transport_search import (
 )
 from smcity.tools.transport_simple_modes import (
     PLAN_JOURNEY_TOOL,
-    PLAN_TAXI_TOOL,
     PLAN_WALKING_TOOL,
 )
 
@@ -47,7 +46,6 @@ def build_default_registry() -> ToolRegistry:
         FIND_STOPS_BY_NAME_TOOL,
         PLAN_SIMPLE_ROUTE_TOOL,
         PLAN_WALKING_TOOL,
-        PLAN_TAXI_TOOL,
         PLAN_JOURNEY_TOOL,
         PLAN_MULTIMODAL_JOURNEY_TOOL,
         # context

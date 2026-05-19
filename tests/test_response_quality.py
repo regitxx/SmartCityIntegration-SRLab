@@ -82,9 +82,17 @@ def test_system_prompt_has_per_mode_routing_table() -> None:
     # walking / 步行 / 行路 → plan_walking_route
     assert "plan_walking_route" in SYSTEM_PROMPT
     assert "步行" in SYSTEM_PROMPT and "行路" in SYSTEM_PROMPT
-    # taxi / 的士 → plan_taxi_estimate
-    assert "plan_taxi_estimate" in SYSTEM_PROMPT
-    assert "的士" in SYSTEM_PROMPT
+    # buses (KMB / Citybus / GMB) routed to per-operator tools
+    assert "get_kmb_eta" in SYSTEM_PROMPT
+    assert "get_citybus_eta" in SYSTEM_PROMPT
+
+
+def test_system_prompt_forbids_taxi_mode() -> None:
+    """v0.4.12 — taxi is not a supported mode. Prompt must explicitly say so
+    so the LLM doesn't fall back to 'you could also take a taxi'."""
+    assert "Taxi is NOT a supported mode" in SYSTEM_PROMPT
+    # And no positive routing entry for taxi.
+    assert "plan_taxi_estimate" not in SYSTEM_PROMPT
 
 
 def test_system_prompt_forbids_harmony_tokens_in_reply() -> None:

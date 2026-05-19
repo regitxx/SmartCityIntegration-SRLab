@@ -24,7 +24,6 @@ DATASET_COVERAGE: dict[str, set[SupportedLang]] = {
     "transport.find_stops_by_name": {"en", "zh-Hant", "zh-Hans"},
     "transport.plan_simple_route": {"en", "zh-Hant"},
     "transport.plan_walking_route": {"en", "zh-Hant"},
-    "transport.plan_taxi_estimate": {"en", "zh-Hant"},
     "transport.plan_journey": {"en", "zh-Hant"},
     "transport.get_gmb_eta": {"en", "zh-Hant", "zh-Hans"},
     "transport.plan_multimodal_journey": {"en", "zh-Hant"},  # OTP2 + HK GTFS feeds
