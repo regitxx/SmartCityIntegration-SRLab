@@ -109,7 +109,7 @@
   <table id="datasets">
     <thead><tr>
       <th>ID</th><th>Title</th><th>Category</th><th>Source</th>
-      <th>Status</th><th>Wired by</th><th>Notes</th>
+      <th>Status</th><th>Wired by</th><th>Tested (n / hit-rate)</th><th>Notes</th>
     </tr></thead>
     <tbody></tbody>
   </table>
@@ -135,26 +135,46 @@ async function load() {
     return;
   }
   const report = await r.json();
-  renderSummary(report.summary);
-  renderDatasets(report.datasets);
+  const testByDataset = new Map();
+  if (report.test_summary && report.test_summary.datasets) {
+    for (const t of report.test_summary.datasets) testByDataset.set(t.dataset_id, t);
+  }
+  renderSummary(report.summary, report.test_summary);
+  renderDatasets(report.datasets, testByDataset);
   renderAdditional(report.additional_integrations);
   wireFilters();
 }
 
-function renderSummary(s) {
+function renderSummary(s, ts) {
+  let testTile = "";
+  if (ts && ts.datasets && ts.datasets.length) {
+    const totalQ = ts.datasets.reduce((a, d) => a + d.total, 0);
+    const expectedHits = ts.datasets.reduce((a, d) => a + Math.round(d.total * d.expected_tool_hit_rate), 0);
+    const rate = totalQ ? (expectedHits / totalQ * 100).toFixed(0) : "—";
+    testTile = `
+      <div class="stat"><div class="v">${totalQ}</div><div class="l">questions tested</div></div>
+      <div class="stat wired"><div class="v">${rate}%</div><div class="l">hit expected tool</div></div>
+    `;
+  }
   document.getElementById("summary").innerHTML = `
     <div class="stat"><div class="v">${s.total_xlsx_datasets}</div><div class="l">xlsx datasets</div></div>
     <div class="stat wired"><div class="v">${s.wired}</div><div class="l">wired</div></div>
     <div class="stat partial"><div class="v">${s.partial}</div><div class="l">partial</div></div>
     <div class="stat missing"><div class="v">${s.missing}</div><div class="l">missing</div></div>
     <div class="stat"><div class="v">${s.registered_tool_count}</div><div class="l">tools registered</div></div>
+    ${testTile}
   `;
   document.getElementById("ds-count").textContent = s.total_xlsx_datasets;
 }
 
-function renderDatasets(rows) {
+function renderDatasets(rows, testByDataset) {
   const tbody = document.querySelector("#datasets tbody");
-  tbody.innerHTML = rows.map(d => `
+  tbody.innerHTML = rows.map(d => {
+    const t = testByDataset.get(d.id);
+    const tested = t
+      ? `<span title="${t.buckets ? JSON.stringify(t.buckets) : ''}">${t.total} / ${(t.expected_tool_hit_rate*100).toFixed(0)}%</span>`
+      : `<span style="opacity:0.4">—</span>`;
+    return `
     <tr class="${d.status}" data-status="${d.status}">
       <td><strong>${escapeHtml(d.id)}</strong></td>
       <td>${escapeHtml(d.title)}</td>
@@ -162,9 +182,11 @@ function renderDatasets(rows) {
       <td>${d.url ? `<a href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.source)} ↗</a>` : escapeHtml(d.source)}</td>
       <td class="status ${d.status}">${d.status}</td>
       <td class="tools">${renderTools(d.tools, d.missing_tools)}</td>
+      <td class="tested">${tested}</td>
       <td class="notes">${d.notes ? escapeHtml(d.notes) : ""}</td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
 }
 
 function renderAdditional(rows) {

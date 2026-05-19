@@ -2,6 +2,106 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.16] — 2026-05-19
+
+**Coverage test suite — Gemma-driven 10 000-question stratified probe.** Tesfa's ask: "imagine this scenario — we generate 10000 questions in English asking about various permutations; see what works and what doesn't. Use Gemma to generate the questions. Document and categorise all the answers."
+
+Three new modules under `smcity_fuzz/`, one CLI verb (`coverage`), one new web UI panel:
+
+### `smcity_fuzz/coverage_gen.py` — question synth
+
+- Stratifies generation across every dataset in `data/coverage_catalog.json` (the same one served at `/coverage`).
+- Each dataset gets ~`count/N` questions; Gemma is asked in batches of 25 to amortise the per-prompt overhead.
+- System prompt forbids near-rewordings, requires HK-specific place names, single-sentence English, ≤ 25 words.
+- Output is JSONL — one question per line tagged with `expected_dataset_id` and `expected_tools` so the analyzer can score by tool match.
+- Tolerates Gemma malformed output: extracts the outermost `[…]` block, ignores partial replies.
+- Default synth model: `gemma-synth` (LM Studio identifier for `google/gemma-3-12b` — Gemma 3 27B doesn't fit in 96 GB alongside the gpt-oss-120b production model).
+
+### `smcity_fuzz/coverage_run.py` — concurrent runner
+
+- Reads the question JSONL, POSTs each to `/turn` with a unique `session_id`.
+- `asyncio.Semaphore` for concurrency (default 4 — gpt-oss-120b on Mac Studio handles this comfortably).
+- Checkpoint via line-count: re-running on an existing results file skips already-processed `question_id`s. Crash-resumable across sessions.
+- Captures full response: reply text, tool trace (name / status / latency / cached), elapsed, detected language, citation count.
+- Categorises wire failures explicitly: `http_error`, `timeout`, `network_error` so the analyzer sees them as first-class buckets, not "ok with nothing".
+
+### `smcity_fuzz/coverage_report.py` — analyzer
+
+For each result row buckets it into one of:
+- `ok_expected_tool` — the agent called at least one tool from `expected_tools`.
+- `ok_other_tool` — agent called a tool, but not the expected one (informative, not necessarily a failure).
+- `ok_no_tool` — fast-path / chitchat / cached, no tool fired.
+- `geocoder_collision` — reply contains the collision-guard wording (origin = destination).
+- `empty_reply`, `timeout`, `error_status`, `http_error`, `network_error`.
+
+Emits a Markdown report with: overall bucket totals, per-dataset table (total / hit-rate / avg latency), up to 5 failing-question samples per dataset. Also writes a compact JSON summary the agent reads back into `/coverage` so the `/data` UI shows per-dataset test health alongside the static catalog status.
+
+### CLI (`smcity_fuzz/cli.py`)
+
+New `coverage` verb with three sub-subcommands:
+
+```
+python -m smcity_fuzz coverage generate \
+    --count 10000 --gemma-model gemma-synth \
+    --lm-base-url http://localhost:1234/v1 \
+    --out logs/coverage_questions.jsonl
+
+python -m smcity_fuzz coverage run \
+    --questions logs/coverage_questions.jsonl \
+    --agent-url https://smcity.taila366aa.ts.net \
+    --concurrency 4 --out logs/coverage_results.jsonl
+
+python -m smcity_fuzz coverage report \
+    --results logs/coverage_results.jsonl \
+    --out-md logs/coverage_report.md \
+    --out-json data/coverage_test_summary.json
+```
+
+### `smcity/coverage.py` + `/coverage` payload
+
+Now reads `data/coverage_test_summary.json` (written by the report verb) and appends it as `test_summary` on the `/coverage` JSON response. Empty until a suite has been run.
+
+### `web/coverage.html`
+
+New stat tiles: "questions tested" + "hit expected tool" (overall %). Per-dataset table gains a "Tested (n / hit-rate)" column showing per-dataset run results when present.
+
+### Smoke verification
+
+100-question pilot on Mac Studio:
+- Generation: 10 datasets × 10 questions = 100 unique questions in ~30 s via gemma-3-12b.
+- Run: ~6 minutes wall time at concurrency 4.
+- Sample questions Gemma produced: *"Where's the closest public toilet near Hong Kong University?"*, *"What's the typical headway for the 978 bus route heading towards Sha Tin at around 7:00 AM on a weekday?"*, *"What time does the ferry from Central to Tuen Mun start running?"*
+
+### Handoff: the 10 000 overnight run
+
+```bash
+ssh earnestdesign@earnests-mac-studio.taila366aa.ts.net
+cd ~/srv/smcity
+nohup uv run python -m smcity_fuzz coverage generate \
+    --count 10000 --gemma-model gemma-synth \
+    --lm-base-url http://localhost:1234/v1 \
+    --out logs/coverage_questions_v1.jsonl \
+    > logs/coverage_gen.log 2>&1 &
+# wait ~25 minutes, then:
+nohup uv run python -m smcity_fuzz coverage run \
+    --questions logs/coverage_questions_v1.jsonl \
+    --agent-url https://smcity.taila366aa.ts.net \
+    --concurrency 4 --out logs/coverage_results_v1.jsonl \
+    > logs/coverage_run.log 2>&1 &
+# overnight (~6-7 hours), then:
+uv run python -m smcity_fuzz coverage report \
+    --results logs/coverage_results_v1.jsonl \
+    --out-md logs/coverage_report_v1.md \
+    --out-json data/coverage_test_summary.json
+# coverage page auto-shows the test column after the JSON exists
+```
+
+Phoenix Arize captures every one of those 10k turns automatically thanks to the v0.4.14 instrumentation — full traceability per question without extra work.
+
+### Image
+
+`smcity:0.4.16`. No backend changes that affect the running agent — just the new CLI module + UI panel.
+
 ## [0.4.15] — 2026-05-19
 
 **Data coverage view + Funnel off.** Two boss asks in one ship:

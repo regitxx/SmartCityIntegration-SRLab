@@ -27,6 +27,19 @@ from pydantic import BaseModel
 
 _DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "coverage_catalog.json"
 
+# Latest coverage-suite summary JSON, written by
+# ``smcity_fuzz.coverage_report`` and surfaced in the /coverage response
+# under ``test_summary`` so the /data page can show per-dataset test
+# health side-by-side with the static catalog status.
+#
+# Lives in /app/state (volume-backed) — NOT /app/data (image-baked) — so
+# a fresh test run can update it without rebuilding the container image.
+# Falls back to the dev path under repo/data/ for local runs.
+_TEST_SUMMARY_PATH_PROD = Path("/app/state/coverage_test_summary.json")
+_TEST_SUMMARY_PATH_DEV = (
+    Path(__file__).resolve().parent.parent / "data" / "coverage_test_summary.json"
+)
+
 CoverageStatus = Literal["wired", "partial", "missing"]
 
 
@@ -70,10 +83,27 @@ class CoverageSummary(BaseModel):
     catalog_version: str
 
 
+class TestSummaryDataset(BaseModel):
+    dataset_id: str
+    total: int
+    expected_tool_hit_rate: float
+    avg_elapsed_ms: int
+    buckets: dict[str, int]
+    top_tools_fired: list[Any] = []  # list[ tuple[str, int] ] roundtripped as JSON
+
+
+class TestSummary(BaseModel):
+    generated_at: str
+    datasets: list[TestSummaryDataset]
+
+
 class CoverageReport(BaseModel):
     summary: CoverageSummary
     datasets: list[DatasetCoverage]
     additional_integrations: list[AdditionalIntegration]
+    # Optional — only present when a coverage suite has been run and the
+    # summary JSON has been copied into data/coverage_test_summary.json.
+    test_summary: TestSummary | None = None
 
 
 @cache
@@ -151,11 +181,33 @@ def compute_coverage(registered_tool_names: set[str]) -> CoverageReport:
         catalog_version=raw.get("version", ""),
     )
 
+    test_summary = _load_test_summary()
     return CoverageReport(
         summary=summary,
         datasets=datasets,
         additional_integrations=additional,
+        test_summary=test_summary,
     )
+
+
+def _load_test_summary() -> TestSummary | None:
+    """Read the latest coverage-suite summary if it exists on disk.
+
+    The summary file is written by ``smcity_fuzz coverage report
+    --out-json …/coverage_test_summary.json`` and read live each request
+    so a new test run is reflected immediately — no agent restart.
+    Looks in /app/state first (production volume-backed path), then in
+    the repo's data/ directory as a dev fallback.
+    """
+    for path in (_TEST_SUMMARY_PATH_PROD, _TEST_SUMMARY_PATH_DEV):
+        if not path.exists():
+            continue
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            return TestSummary.model_validate(raw)
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
 
 
 __all__ = [

@@ -139,6 +139,51 @@ def _cmd_failures(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_coverage(args: argparse.Namespace) -> int:
+    """Dispatcher for the `coverage` sub-subcommands. Each one is a thin
+    wrapper around the module's own argparse so we don't duplicate it here.
+    """
+    from smcity_fuzz import coverage_gen, coverage_report, coverage_run
+
+    sub = args.coverage_sub
+    if sub == "generate":
+        return coverage_gen.main(
+            [
+                f"--count={args.count}",
+                f"--gemma-model={args.gemma_model}",
+                f"--lm-base-url={args.lm_base_url}",
+                f"--out={args.out}",
+                f"--batch-size={args.batch_size}",
+                f"--concurrency={args.concurrency}",
+            ]
+        )
+    if sub == "run":
+        argv: list[str] = [
+            f"--questions={args.questions}",
+            f"--agent-url={args.agent_url}",
+            f"--out={args.out}",
+            f"--concurrency={args.concurrency}",
+            f"--timeout-s={args.timeout_s}",
+        ]
+        if args.limit is not None:
+            argv.append(f"--limit={args.limit}")
+        return coverage_run.main(argv)
+    if sub == "report":
+        argv2: list[str] = [
+            f"--results={args.results}",
+            f"--out-md={args.out_md}",
+        ]
+        if args.out_json:
+            argv2.append(f"--out-json={args.out_json}")
+        if args.catalog:
+            argv2.append(f"--catalog={args.catalog}")
+        if args.title_suffix:
+            argv2.append(f"--title-suffix={args.title_suffix}")
+        return coverage_report.main(argv2)
+    print(f"unknown coverage subcommand: {sub}", file=sys.stderr)
+    return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="smcity_fuzz")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -228,6 +273,44 @@ def build_parser() -> argparse.ArgumentParser:
         help="include passing rows too (default: failures only)",
     )
 
+    # --- coverage [generate|run|report] ----------------------------------
+    p_cov = sub.add_parser(
+        "coverage",
+        help="Coverage test suite: Gemma question synth + run-everything + per-dataset report",
+    )
+    cov_sub = p_cov.add_subparsers(dest="coverage_sub", required=True)
+
+    cg = cov_sub.add_parser("generate", help="Generate N stratified English questions via Gemma")
+    cg.add_argument("--count", type=int, default=10000)
+    cg.add_argument("--gemma-model", default="gemma-synth")
+    cg.add_argument(
+        "--lm-base-url",
+        default="http://host.docker.internal:1234/v1",
+        help="LM Studio OpenAI-compatible base URL.",
+    )
+    cg.add_argument("--out", type=Path, required=True)
+    cg.add_argument("--batch-size", type=int, default=25)
+    cg.add_argument("--concurrency", type=int, default=2)
+
+    cr = cov_sub.add_parser("run", help="Drive generated questions through /turn, save results")
+    cr.add_argument("--questions", type=Path, required=True)
+    cr.add_argument(
+        "--agent-url",
+        default="https://smcity.taila366aa.ts.net",
+        help="Base URL of the running agent (tailnet HTTPS).",
+    )
+    cr.add_argument("--out", type=Path, required=True)
+    cr.add_argument("--concurrency", type=int, default=4)
+    cr.add_argument("--timeout-s", type=float, default=120.0)
+    cr.add_argument("--limit", type=int, default=None, help="Cap question count for smoke tests")
+
+    crep = cov_sub.add_parser("report", help="Build per-dataset markdown report from run results")
+    crep.add_argument("--results", type=Path, required=True)
+    crep.add_argument("--out-md", type=Path, required=True)
+    crep.add_argument("--out-json", type=Path, default=None)
+    crep.add_argument("--catalog", type=Path, default=None)
+    crep.add_argument("--title-suffix", default="")
+
     return parser
 
 
@@ -242,6 +325,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_failures(args)
     if args.cmd == "export":
         return _cmd_export(args)
+    if args.cmd == "coverage":
+        return _cmd_coverage(args)
     parser.error(f"unknown command {args.cmd!r}")
     return 2
 
