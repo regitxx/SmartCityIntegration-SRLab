@@ -2,6 +2,77 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.14] — 2026-05-19
+
+**Zero-downtime deploys + Phoenix Arize tracing.** Two things the boss asked for in one shipment:
+
+1. *"It doesn't ever go down while you update the code"* — switched the deploy from a single-replica `--force-recreate` (~15 s outage per update) to blue/green replicas behind an nginx router with `proxy_next_upstream` failover. Rolling restart proven zero-downtime under continuous load.
+2. *"Add integration to Phoenix Arize, see all session interactions, tool-call specifics, internal logic"* — OpenTelemetry spans exported to `https://phoenix.sustainer.ai/projects/smcity`. New session per page-refresh = new history in Phoenix, exactly as requested.
+
+### Phoenix instrumentation (smcity/observability.py)
+
+- `smcity.turn` span per user request. Attributes: `session.id`, `user.text`, `reply.text`, `tool_count`, `citations_count`, `detected_lang`, `locale_override`. Phoenix uses `session.id` to bucket conversation history; refreshing the page in the UI = new `session_id` = new trace tree.
+- `tool.<name>` span per tool call inside `ToolRegistry.dispatch`. Attributes: `tool.name`, `tool.args` (JSON, truncated to 4 KB), `tool.result` (JSON, truncated to 8 KB), `tool.status`, `tool.latency_ms`, `tool.cached`, `tool.error` on failure.
+- `llm.chat` spans auto-instrumented by `openinference-instrumentation-openai` — model, prompt, completion, token counts, finish reason for every call to LM Studio.
+- Outbound httpx auto-instrumented by `opentelemetry-instrumentation-httpx` — every `data.gov.hk` / OSM Nominatim / ALS / MTR-realtime call shows up with method, URL, status, duration.
+- `service.instance.id={blue|green}` resource attribute so you can tell which replica served a given request directly from Phoenix.
+
+Tracing is opt-in: with `PHOENIX_COLLECTOR_ENDPOINT` empty the agent runs unchanged with no-op exporter (spans are still produced in-process; just nothing leaves the box). `PHOENIX_DISABLE=1` hard-kills the tracer.
+
+### Zero-downtime architecture
+
+```
+boss → tailscale → nginx-router → smcity-agent-blue
+                              ╲→ smcity-agent-green
+```
+
+- **`smcity-router`** — minimal `nginx:alpine`, ~50-line config. Round-robins both replicas; on any 5xx / connect-error / timeout marks that upstream `down` for 5 s and routes to the survivor (`proxy_next_upstream error timeout http_502 http_503 http_504 non_idempotent`). WebSocket-aware via `Upgrade` / `Connection` header passthrough.
+- **`smcity-agent-blue` + `smcity-agent-green`** — same image, same config, same `smcity-sessions` volume. Always both running, both healthy.
+- **`deploy/deploy.sh`** — single script: build new image, recreate blue (green serves everything), wait healthy, recreate green (blue serves everything), reload nginx. Run with `--no-build` to roll-restart without a rebuild.
+
+Proven under load: 60 s of `curl /health` at 5 req/s during `deploy.sh --no-build` → **300 successes, 0 failures**.
+
+### Files
+
+- New: `smcity/observability.py` (Phoenix + OTel bootstrap)
+- New: `deploy/nginx.conf` (load-balancer config)
+- New: `deploy/deploy.sh` (rolling restart)
+- Updated: `deploy/docker-compose.yml` (4 services now: blue, green, router, tailscale)
+- Updated: `deploy/serveconfig.json` (proxies tailnet HTTPS → `smcity-router:8080`)
+- Updated: `deploy/.env.example` (PHOENIX_* vars)
+- Updated: `deploy/README.md` (new architecture diagram + deploy workflow)
+- Updated: `smcity/app.py`, `smcity/orchestrator.py`, `smcity/tools/registry.py` (span sites)
+- Updated: `pyproject.toml` (`opentelemetry-*` and `openinference-*` deps)
+
+### Migration steps (one-time, only the first deploy is non-zero-downtime)
+
+```bash
+# On Mac Studio:
+cd ~/srv/smcity
+git pull   # or rsync
+cd deploy
+
+# Append Phoenix vars to existing .env (TS_AUTHKEY stays).
+cat >> .env <<EOF
+PHOENIX_COLLECTOR_ENDPOINT=https://phoenix.sustainer.ai
+PHOENIX_API_KEY=<your-phoenix-api-key>
+PHOENIX_PROJECT_NAME=smcity
+EOF
+
+# One-shot migration to the new compose structure (~30 s outage):
+docker compose up -d --build --remove-orphans
+
+# Verify:
+docker compose ps              # 4 healthy containers
+curl https://smcity.taila366aa.ts.net/health
+```
+
+Future updates: just `./deploy.sh` and the URL stays up.
+
+### Image
+
+`smcity:0.4.14`.
+
 ## [0.4.13] — 2026-05-19
 
 **Replaces the v0.4.12 hardcoded landmark dict with a generic geocoder backed by OSM Nominatim.** v0.4.12 fixed the PolyU/CityU symptom by adding 84 explicit string→coords entries for seven universities + Disneyland — which would have failed the moment a real user asked about a restaurant, mall, hospital, park, beach, hotel, school, or any street that wasn't already in the dict. User feedback was direct ("you cannot just build custom solutions for example this is poor quality coder") and correct. This release deletes that dict and routes free-text queries through OSM Nominatim with a Hong Kong viewbox, which has comprehensive HK coverage in EN / 繁 / 简 from community-edited OSM data and handles the long-tail automatically.

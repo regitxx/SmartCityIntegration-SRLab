@@ -1,143 +1,120 @@
-# smcity on the Mac Studio — Docker + Tailscale sidecar
+# smcity on the Mac Studio — Docker + Tailscale + zero-downtime deploy
 
-Deploys the agent as two containers on the Mac Studio so the demo URL keeps working when the Macbook sleeps. The Tailscale sidecar terminates HTTPS and proxies to the agent over the docker bridge — no public IP, no router config, no cert plumbing.
+Runs the agent as **two replicas behind nginx** so a code update never drops a request, plus the Tailscale sidecar that terminates HTTPS at `https://smcity.<tailnet>.ts.net/`.
 
 ```
-              ┌──────────────────── Mac Studio host ────────────────────┐
-              │                                                         │
-   boss ─►    │   ┌──────────────────────┐    ┌──────────────────────┐  │
-   (HTTPS)   ─┼──►│ smcity-tailscale     │───►│ smcity-agent         │  │
-              │   │  sidecar             │    │   uvicorn :8080      │  │
-              │   │  joins the tailnet,  │    │   FastAPI · 27 tools │  │
-              │   │  terminates TLS at   │    │                      │  │
-              │   │  https://<host>.ts.net│   │  reaches LM Studio   │  │
-              │   │  → proxies to agent  │    │  on the host via     │  │
-              │   └──────────────────────┘    │  host.docker.internal│  │
-              │                               └─────────┬─────────────┘ │
-              │                                         │               │
-              │                                         ▼               │
-              │                          LM Studio :1234 (on host)      │
-              │                              gpt-oss-120b               │
-              └─────────────────────────────────────────────────────────┘
+            ┌──────────────────────────── Mac Studio host ────────────────────────────┐
+            │                                                                         │
+boss ─►     │   ┌────────────────┐   ┌──────────────┐   ┌───────────────────────┐    │
+(HTTPS)   ──┼──►│ smcity-        │──►│ smcity-      │──►│ smcity-agent-blue     │    │
+            │   │  tailscale     │   │  router      │   │   uvicorn :8080       │    │
+            │   │  terminates    │   │  nginx       │   │   FastAPI · 27 tools  │    │
+            │   │  TLS at        │   │  load-       │   │                       │    │
+            │   │  *.ts.net      │   │  balancer    │   ├───────────────────────┤    │
+            │   │                │   │  + retry     │──►│ smcity-agent-green    │    │
+            │   └────────────────┘   └──────────────┘   │   uvicorn :8080       │    │
+            │                                           │   FastAPI · 27 tools  │    │
+            │                                           └─────────┬─────────────┘    │
+            │                                                     │                  │
+            │              all replicas reach LM Studio ◄─────────┘                  │
+            │              on the host via host.docker.internal :1234                │
+            │                                                                        │
+            │              all replicas export OTel spans ─► Phoenix Arize           │
+            │              (https://phoenix.sustainer.ai, project=smcity)            │
+            └────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Zero-downtime model:** the nginx router has both blue and green as upstreams. When `deploy.sh` rebuilds and recreates blue, nginx automatically routes all traffic to green for the ~10s blue is restarting (and vice versa). Clients see no 5xx, no dropped WebSocket frames.
 
 ## Prereqs on the Mac Studio (one-time)
 
-1. **Docker Desktop for Mac** installed and running. (Check with `docker info`.)
+1. **Docker Desktop for Mac** installed and running (`docker info` succeeds).
 2. **LM Studio** running with `openai/gpt-oss-120b` loaded.
-3. **`host.docker.internal` reachable from containers** — this is built-in on Docker Desktop for Mac. Verify:
-   ```bash
-   docker run --rm alpine sh -c "apk add curl >/dev/null; curl -s host.docker.internal:1234/v1/models | head -c 200"
-   ```
-4. **Tailscale tailnet ready** — the deploy will register a new node called `smcity`. If Funnel-public access is wanted later, enable Funnel for the tailnet at <https://login.tailscale.com/admin/dns> and edit `serveconfig.json` to flip `AllowFunnel: true`.
+3. **`host.docker.internal` reachable from containers** — built-in on Docker Desktop for Mac.
+4. **Tailscale tailnet ready** — the deploy registers a new node called `smcity` on Earnest Design Lab's tailnet.
 
 ## One-time setup
 
 ```bash
-# 1. Copy the repo to the Mac Studio (anywhere; here we use ~/srv/smcity):
 mkdir -p ~/srv && cd ~/srv
-git clone https://github.com/regitxx/SmartCityIntegration-SRLab.git smcity
+git clone https://github.com/regitxx/SmartCityIntegration.git smcity   # or rsync
 cd smcity/deploy
 
-# 2. Drop your Tailscale auth key into .env:
+# Fill in .env: Tailscale auth key + Phoenix API key.
 cp .env.example .env
-$EDITOR .env   # paste TS_AUTHKEY=tskey-auth-...
+nano .env
 
-# 3. Build + start the stack:
+# Bring up the full stack: blue + green + router + tailscale.
 docker compose up -d --build
-```
 
-The first build takes ~3–5 min (uv resolves deps, builds the wheel). Subsequent rebuilds are cached.
-
-## What success looks like
-
-```bash
+# Wait for everything healthy (~30 s):
 docker compose ps
-# Both services should be "running" / "healthy"
-#   NAME              IMAGE                          STATUS
-#   smcity-agent      smcity:0.4.10                  Up · healthy
-#   smcity-tailscale  tailscale/tailscale:latest     Up
-
-docker compose logs smcity-tailscale | grep -E "magicdns|listening|https"
-# Should show: "tailscaled is running" and a HTTPS URL line
 ```
 
-The agent is then reachable at:
+`docker compose ps` should show four containers, all `Up … (healthy)`:
 
-- Inside the tailnet: <https://smcity.YOUR-TAILNET.ts.net/>
-- The exact URL is printed in the sidecar logs (look for `magicdns:`).
+| name                  | role                       |
+|-----------------------|----------------------------|
+| smcity-agent-blue     | agent replica #1           |
+| smcity-agent-green    | agent replica #2           |
+| smcity-router         | nginx load-balancer        |
+| smcity-tailscale      | tailnet sidecar + TLS      |
 
-Quick smoke test from any tailnet machine (or the Mac Studio itself):
+## Subsequent code updates — `./deploy.sh`
 
 ```bash
-curl -s https://smcity.YOUR-TAILNET.ts.net/health | jq .
-# {"status":"ok","llm_reachable":true,"llm_model":"openai/gpt-oss-120b","version":"0.4.10"}
-
-# Open in a browser to use the chat UI:
-open https://smcity.YOUR-TAILNET.ts.net/
+cd ~/srv/smcity/deploy
+# pull / rsync the new code first, then:
+./deploy.sh
 ```
 
-## Sharing with the boss
+The script:
+1. Builds a new image with the current source.
+2. Recreates `smcity-agent-blue` — green keeps serving every request.
+3. Waits for blue's healthcheck to go green.
+4. Recreates `smcity-agent-green` — blue serves every request.
+5. Reloads the nginx config (clears any cached unhealthy markers).
 
-**Path A — tailnet member (recommended for one-on-one demos):**
-1. Invite the boss as a user on the tailnet at <https://login.tailscale.com/admin/users>.
-2. He installs Tailscale, accepts the invite, hits the same `smcity.YOUR-TAILNET.ts.net` URL.
-3. Revoke his access at any time.
+Use `./deploy.sh --no-build` when the only change is a config tweak (e.g. flipping AllowFunnel) and you want to roll the replicas without rebuilding the image.
 
-**Path B — public via Funnel (no Tailscale install needed on his side):**
-1. Enable Funnel for the tailnet at <https://login.tailscale.com/admin/dns> (one-click).
-2. Edit `serveconfig.json` → change `"AllowFunnel": false` to `"AllowFunnel": true` for the `:443` entry.
-3. `docker compose restart smcity-tailscale`.
-4. The same URL is now reachable from the public internet (anyone with the URL can access). The agent's per-session rate limit + WS origin guard + PII redaction stay in place.
+## Phoenix Arize tracing
 
-## Operating it
+Spans appear at <https://phoenix.sustainer.ai/projects/smcity>. The agent emits:
+
+- `smcity.turn` per user request, with `session.id`, `user.text`, `reply.text`, `tool_count`, `detected_lang`.
+- `tool.<name>` per tool call, with `tool.args`, `tool.result` (truncated to 8 KB), `tool.status`, `tool.latency_ms`, `tool.cached`.
+- `llm.chat` per OpenAI-compatible call (auto-instrumented by openinference) with model, messages, completion, token counts.
+- Outbound httpx calls (data.gov.hk, OSM Nominatim, ALS, MTR realtime, …) auto-instrumented with method/URL/status/duration.
+
+Set `PHOENIX_DISABLE=1` in `.env` to suppress the OTLP exporter (e.g. if Phoenix is briefly unavailable). Spans are still produced in-process — only the network export is disabled.
+
+## Smoke tests
 
 ```bash
-# Tail live logs
-docker compose logs -f
+# Through the router (internal):
+docker compose exec smcity-router wget -qO- http://localhost:8080/health
 
-# Restart just the agent (e.g. after a git pull)
-git pull
-docker compose up -d --build smcity-agent
-
-# Stop everything (sidecar will leave the tailnet within ~30s)
-docker compose down
-
-# Stop + wipe persisted session DB (rare)
-docker compose down -v
+# Through the Tailscale URL (public if Funnel is enabled):
+curl https://smcity.taila366aa.ts.net/health
 ```
 
-## When LM Studio isn't loaded
+Expected: `{"status":"ok","llm_reachable":true,"llm_model":"openai/gpt-oss-120b","version":"0.4.14"}`
 
-If `gpt-oss-120b` isn't loaded in LM Studio on the host, `/health` will report `llm_reachable: false` and every tool-using turn falls back to `"(LM Studio unreachable — check the Mac Studio)"`. The agent itself stays up.
-
-Load remotely from any tailnet machine without touching the Mac Studio:
+## Operating commands
 
 ```bash
-# Python SDK approach (uses the LM Studio websocket)
-uv run --with lmstudio python -c "
-import lmstudio as lms
-with lms.Client(api_host='127.0.0.1:1234') as c:
-    c.llm.load_new_instance('openai/gpt-oss-120b')
-    print('loaded:', [m.identifier for m in c.llm.list_loaded()])
-"
+docker compose logs -f smcity-agent-blue       # tail one replica
+docker compose logs -f smcity-router            # nginx access + error log
+docker compose restart smcity-agent-blue        # restart just one replica
+docker compose down                             # tear everything down
+docker compose ps                               # current status
 ```
-
-Or `lms load openai/gpt-oss-120b` directly on the Mac Studio.
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `tailscaled exited code 1` in sidecar logs | Auth key already used or wrong tags | Generate a fresh key, paste into `.env`, `docker compose up -d --force-recreate smcity-tailscale` |
-| Sidecar healthy but agent `health: starting` then unhealthy | LM Studio not loaded, agent retries forever | Load model on host (see above) |
-| `host.docker.internal: name does not resolve` | Not on Docker Desktop (Linux Docker daemon) | The compose already sets `extra_hosts: host-gateway` for this — should work; if it doesn't, replace with the host IP |
-| `Funnel not enabled on tailnet` | One-time admin click missing | <https://login.tailscale.com/f/funnel?node=...> (URL appears in sidecar logs) |
-| Boss says cert is invalid | Browser cached an old `*.ts.net` cert | Hard refresh; Tailscale auto-issues a real Let's-Encrypt cert per hostname |
-| Agent OOMs | Default is single worker; the LLM is on the host so the container is small — under 200 MB. If you see OOMs the LLM is overloading the host | Reduce `LLM_TIMEOUT_S` or use a smaller model |
-
-## What's NOT in this deploy yet
-
-- **OpenTripPlanner 2 sidecar** (`otp/`) for true multimodal (bus + ferry + minibus). Separate docker-compose, requires GTFS feeds — see `otp/README.md`.
-- **The adversarial fuzzer** (`smcity_fuzz/`). Run that from your laptop against the deployed URL; no need to run in production.
-- **Persistent log shipping**. Container logs live in `docker logs`; if you want them off-host, add a logging driver (loki, fluent-bit, etc.) — out of scope for the demo.
+| Symptom                                                | Likely cause                                                                                  |
+|---------------------------------------------------------|-----------------------------------------------------------------------------------------------|
+| `health` returns `llm_reachable: false`                | LM Studio not running on the host, or no model loaded (`lms ps` to verify).                   |
+| Sidecar logs "no DERP relay"                           | Tailscale auth key expired/used. Regenerate at https://login.tailscale.com/admin/settings/keys. |
+| `502 Bad Gateway` from the URL                         | Both replicas down. `docker compose ps` to inspect; usually fixed by `docker compose up -d`.  |
+| Phoenix project shows no spans                         | `PHOENIX_API_KEY` empty or wrong, or `PHOENIX_COLLECTOR_ENDPOINT` missing the `https://` scheme. |

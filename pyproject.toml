@@ -1,6 +1,6 @@
 [project]
 name = "smcity"
-version = "0.4.13"
+version = "0.4.14"
 description = "HK Smart City agentic chat for the Lab of Social Robotics"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,6 +19,16 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "rapidfuzz>=3.10.0",
     "opencc-python-reimplemented>=0.1.7",
+    # Observability — Phoenix Arize via OpenTelemetry. Optional at runtime
+    # (no-op exporter if PHOENIX_API_KEY is not set), but the SDK and the
+    # OpenInference instrumentations are required to expose spans for
+    # LLM calls, HTTP calls, and our tool dispatcher.
+    "opentelemetry-api>=1.27.0",
+    "opentelemetry-sdk>=1.27.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.27.0",
+    "opentelemetry-instrumentation-httpx>=0.48b0",
+    "openinference-instrumentation-openai>=0.1.18",
+    "openinference-semantic-conventions>=0.1.10",
 ]
 
 [project.optional-dependencies]

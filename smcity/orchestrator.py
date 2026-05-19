@@ -27,6 +27,7 @@ from smcity.cantonese_polish import polish as polish_cantonese
 from smcity.classifier import classify
 from smcity.langrouter import DATASET_COVERAGE, LangDetection, choose_query_lang, detect
 from smcity.llm import LLMError, chat, chat_stream
+from smcity.observability import get_tracer, set_attr_safe
 from smcity.prompts import (
     SYSTEM_PROMPT,
     cantonese_style_block,
@@ -75,6 +76,33 @@ class Orchestrator:
         req: TurnRequest,
         *,
         emit: EventEmitter | None = None,
+    ) -> TurnResponse:
+        tracer = get_tracer("smcity.orchestrator")
+        # The turn span wraps the whole user-request lifecycle. Phoenix groups
+        # children (llm.chat, tool.dispatch, outbound httpx) under it; the
+        # `session.id` attribute is what Phoenix uses to bucket history per
+        # session, which is exactly what the boss asked for ("new session on
+        # page refresh = new history").
+        with tracer.start_as_current_span(
+            "smcity.turn",
+            attributes={
+                "session.id": req.session_id,
+                "user.text": req.text[:1024],
+                "locale_override": req.locale_override or "auto",
+            },
+        ) as turn_span:
+            response = await self._handle_turn_inner(req, emit, turn_span)
+            set_attr_safe(turn_span, "reply.text", response.text[:1024])
+            set_attr_safe(turn_span, "detected_lang", response.lang.primary_lang)
+            set_attr_safe(turn_span, "tool_count", len(response.tool_trace))
+            set_attr_safe(turn_span, "citations_count", len(response.citations))
+            return response
+
+    async def _handle_turn_inner(
+        self,
+        req: TurnRequest,
+        emit: EventEmitter | None,
+        _turn_span: Any,  # passed through for child spans
     ) -> TurnResponse:
         started = time.perf_counter()
 

@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from smcity import __version__
 from smcity.llm import ping
+from smcity.observability import init_tracing, shutdown_tracing
 from smcity.orchestrator import Orchestrator, TurnEvent
 from smcity.ratelimit import RateLimiter
 from smcity.schemas import Health, TurnRequest, TurnResponse
@@ -54,6 +55,9 @@ def _configure_logging() -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _configure_logging()
     s = get_settings()
+    # Bring up tracing FIRST so all subsequent startup work (LM Studio ping,
+    # session-store open, etc.) gets attributed to spans if Phoenix is wired.
+    init_tracing(service_name="smcity-agent", version=__version__)
     DEFAULT_DB.parent.mkdir(parents=True, exist_ok=True)
     store = SessionStore(DEFAULT_DB)
     limiter = RateLimiter(rate_per_min=s.rate_per_min, burst=s.rate_burst)
@@ -64,6 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("startup", base_url=s.llm_base_url, model=s.llm_model, version=__version__)
     yield
     log.info("shutdown")
+    shutdown_tracing()
 
 
 app = FastAPI(

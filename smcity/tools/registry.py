@@ -163,6 +163,48 @@ class ToolRegistry:
         self._cache.clear()
 
     async def dispatch(self, name: str, raw_args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        # Local import — observability module is optional in test contexts.
+        from smcity.observability import get_tracer, set_attr_safe
+
+        tracer = get_tracer("smcity.tools")
+        with tracer.start_as_current_span(
+            f"tool.{name}",
+            attributes={
+                "tool.name": name,
+                "session.id": ctx.session_id,
+            },
+        ) as span:
+            result = await self._dispatch_inner(name, raw_args, ctx, span)
+            set_attr_safe(span, "tool.status", result.status)
+            set_attr_safe(span, "tool.latency_ms", result.latency_ms)
+            set_attr_safe(span, "tool.cached", result.cached)
+            if result.error:
+                set_attr_safe(span, "tool.error", result.error)
+            if isinstance(result.result, dict):
+                # Truncated JSON of the result for Phoenix UI inspection. Real
+                # payloads can be ~5-50 KB; we cap at 8 KB to keep span ingest
+                # cost down.
+                import contextlib
+                import json as _json
+
+                with contextlib.suppress(Exception):
+                    set_attr_safe(
+                        span,
+                        "tool.result",
+                        _json.dumps(result.result, ensure_ascii=False)[:8192],
+                    )
+            return result
+
+    async def _dispatch_inner(
+        self,
+        name: str,
+        raw_args: dict[str, Any],
+        ctx: ToolContext,
+        span: Any,  # OTel span
+    ) -> ToolResult:
+        # Local import to keep registry test-context clean.
+        from smcity.observability import set_attr_safe
+
         started = time.perf_counter()
         spec = self.get(name)
         # gpt-oss-120b sometimes double-wraps tool args in the OpenAI
@@ -175,6 +217,17 @@ class ToolRegistry:
             and isinstance(raw_args.get("arguments"), dict)
         ):
             raw_args = raw_args["arguments"]
+        # Record sanitised args for Phoenix — JSON-encoded, capped at 4 KB so
+        # we don't fill a span with a giant blob.
+        import contextlib
+        import json as _json
+
+        with contextlib.suppress(Exception):
+            set_attr_safe(
+                span,
+                "tool.args",
+                _json.dumps(raw_args, ensure_ascii=False)[:4096],
+            )
         try:
             args = spec.args_schema.model_validate(raw_args)
         except Exception as err:

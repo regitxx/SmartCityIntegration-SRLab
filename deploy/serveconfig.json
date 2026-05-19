@@ -1,5 +1,5 @@
 {
-  "//": "Tailscale Serve config for the smcity sidecar. Proxies https://smcity.<your-tailnet>.ts.net/ to the agent container's port 8080 over the docker bridge network. The agent container is reachable by its compose service name 'smcity-agent'. To flip on public-internet exposure via Funnel, set the AllowFunnel value below to true AND make sure Funnel is enabled on the tailnet at https://login.tailscale.com/admin/dns.",
+  "//": "Tailscale Serve config for the smcity sidecar. v0.4.14 points the sidecar at the nginx router (smcity-router:8080) instead of an agent replica directly. The router load-balances blue+green agent replicas and retries on the surviving instance during a rolling restart — that's what makes deploys zero-downtime.",
 
   "TCP": {
     "443": { "HTTPS": true }
@@ -9,7 +9,7 @@
     "${TS_CERT_DOMAIN}:443": {
       "Handlers": {
         "/": {
-          "Proxy": "http://smcity-agent:8080"
+          "Proxy": "http://smcity-router:8080"
         }
       }
     }
