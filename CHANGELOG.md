@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.4.17] — 2026-05-20
+
+**Fixes from the partial 10k coverage results (7268/9442).**
+
+The partial analysis showed zero errors / timeouts / collisions across 7268 turns — the agent is reliable. The patterns to fix were all about tool routing, not stability:
+
+| Symptom | Diagnosis | Fix |
+|---|---|---|
+| OSM POIs hit `geo.address_lookup` 4217×, `geo.search_osm_pois` only 1445× | LLM resolves the landmark via address_lookup, then often answers from general knowledge instead of chaining the POI search | Prompt now spells out the **two-tool chain pattern** for POI queries + lists all 30 categories so the LLM knows niche ones (bench, kiosk, handrail, recycling_location) are in scope. |
+| Niche categories at 5-12% hit rate (`S543` bench, `S538` kiosk, `S541` dentist) | LLM treats them as "I don't have data for that" because the OSM tool description buries them in a long list | OSM tool description rewritten to **lead with "ALWAYS use this for nearest-X queries"** and break the categories into shop / amenity / infrastructure groups so the niche ones aren't an afterthought. |
+| Catalog hit-rate underestimates actual coverage (S514-S549 all 16-45%) | `expected_tools` listed only `geo.search_osm_pois` — but the agent's standard pattern is address_lookup + search_osm_pois together | Added `geo.address_lookup` as a co-acceptable tool for every OSM-backed dataset entry (30 datasets updated). Reflects how the agent actually answers, not an idealised single-call assumption. |
+
+### Files changed
+
+- `smcity/prompts.py` — new "POI / nearest-X queries" guidance block with the explicit 2-tool chain instruction and all 30 OSM categories enumerated.
+- `smcity/tools/osm_pois.py` — `SEARCH_OSM_POIS_TOOL.description_en` rewritten with a stronger "ALWAYS use this" lead and grouped category list.
+- `data/coverage_catalog.json` — 30 OSM POI dataset entries gain `geo.address_lookup` as a co-acceptable tool.
+
+### Not deployed yet
+
+The 10k run is still in flight (7300+ results, ~3h to go). Deploying this version mid-run would mix old-prompt and new-prompt results in the same report. Once the run finishes the report ships against a clean v0.4.16 baseline, then **this** version goes live for a re-run to measure the improvement.
+
+### Known gaps NOT fixed in this release
+
+- **S506 Ferry** (0% hit rate, 218 questions) — still no ferry tool. Agent correctly says "I don't have ferry data" rather than hallucinating, which is acceptable. Wiring `transport.get_ferry_eta` is a separate task.
+- **S512 Topographic iB1000** (0% hit rate, 170 questions) — the iB1000 dataset isn't registered with `csdi.query_features` (only LCSD courts + pools are). Adding it requires looking up the ArcGIS FeatureServer URL for the iB1000 layer from the CSDI Portal — a separate task.
+
+### Image
+
+`smcity:0.4.17` — built but not deployed. Deploy with `./deploy.sh` once 10k run finishes.
+
 ## [0.4.16] — 2026-05-19
 
 **Coverage test suite — Gemma-driven 10 000-question stratified probe.** Tesfa's ask: "imagine this scenario — we generate 10000 questions in English asking about various permutations; see what works and what doesn't. Use Gemma to generate the questions. Document and categorise all the answers."

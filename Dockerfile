@@ -53,7 +53,7 @@ USER smcity
 
 # Session DB lives at /app/state/sessions.sqlite3 — owned by smcity user.
 # To persist across container restarts, mount a named volume on /app/state.
-# (As of v0.4.16 — pre-v0.4.16 deploys mounted the volume at /app/data
+# (As of v0.4.17 — pre-v0.4.17 deploys mounted the volume at /app/data
 # which masked the baked-in JSON catalogs.)
 
 EXPOSE 8080

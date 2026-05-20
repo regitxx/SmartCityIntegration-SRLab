@@ -1,4 +1,4 @@
-# smcity — Mac Studio production deploy (v0.4.16, zero-downtime).
+# smcity — Mac Studio production deploy (v0.4.17, zero-downtime).
 #
 # Four services on a shared bridge network:
 #   smcity-agent-blue   : agent replica #1 (FastAPI)
@@ -30,7 +30,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: smcity:0.4.16
+    image: smcity:0.4.17
     container_name: smcity-agent-blue
     restart: unless-stopped
     extra_hosts:
@@ -67,7 +67,7 @@ services:
   smcity-agent-green:
     # Inherits the build context from blue (same image tag) — compose builds
     # once and both replicas use it.
-    image: smcity:0.4.16
+    image: smcity:0.4.17
     container_name: smcity-agent-green
     restart: unless-stopped
     extra_hosts:

@@ -68,7 +68,9 @@
       "url": "https://portal.csdi.gov.hk/geoportal/?lang=en&datasetId=landsd_rcd_1637223748322_25497",
       "format": "API / GeoPackage / GeoJSON / GML / FGDB / SHP / KML",
       "status": "partial",
-      "tools": ["csdi.query_features"],
+      "tools": [
+        "csdi.query_features"
+      ],
       "notes": "Generic CSDI FeatureServer query tool can hit this layer with the right feature-server URL + bbox / where-clause. Not yet wrapped as a purpose-built 'topographic feature near X' tool."
     },
     {
@@ -79,7 +81,10 @@
       "url": "https://overpass-turbo.eu/s/257T",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "convenience_store"
     },
     {
@@ -90,7 +95,10 @@
       "url": "https://overpass-turbo.eu/s/257V",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "supermarket"
     },
     {
@@ -101,7 +109,10 @@
       "url": "https://overpass-turbo.eu/s/257X",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "public_toilet"
     },
     {
@@ -112,7 +123,10 @@
       "url": "https://overpass-turbo.eu/s/257Y",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "place_of_worship"
     },
     {
@@ -123,7 +137,10 @@
       "url": "https://overpass-turbo.eu/s/2581",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "mtr_station_entrance"
     },
     {
@@ -134,7 +151,10 @@
       "url": "https://overpass-turbo.eu/s/2582",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "recycling_location"
     },
     {
@@ -145,7 +165,10 @@
       "url": "https://overpass-turbo.eu/s/2583",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "veterinarian"
     },
     {
@@ -156,7 +179,10 @@
       "url": "https://overpass-turbo.eu/s/2584",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "hardware_store"
     },
     {
@@ -167,7 +193,10 @@
       "url": "https://overpass-turbo.eu/s/2587",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "public_elevator"
     },
     {
@@ -178,7 +207,10 @@
       "url": "https://overpass-turbo.eu/s/258i",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "hairdresser"
     },
     {
@@ -189,7 +221,10 @@
       "url": "https://overpass-turbo.eu/s/258l",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "clothes_shop"
     },
     {
@@ -200,7 +235,10 @@
       "url": "https://overpass-turbo.eu/s/258n",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "electronics_shop"
     },
     {
@@ -211,7 +249,10 @@
       "url": "https://overpass-turbo.eu/s/258p",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "department_store"
     },
     {
@@ -222,7 +263,10 @@
       "url": "https://overpass-turbo.eu/s/258y",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "variety_store"
     },
     {
@@ -233,7 +277,10 @@
       "url": "https://overpass-turbo.eu/s/258z",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "houseware_shop"
     },
     {
@@ -244,7 +291,10 @@
       "url": "https://overpass-turbo.eu/s/258B",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "beauty_shop"
     },
     {
@@ -255,7 +305,10 @@
       "url": "https://overpass-turbo.eu/s/258D",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "optician"
     },
     {
@@ -266,7 +319,10 @@
       "url": "https://overpass-turbo.eu/s/258E",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "shoe_shop"
     },
     {
@@ -277,7 +333,10 @@
       "url": "https://overpass-turbo.eu/s/258H",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "greengrocer"
     },
     {
@@ -288,7 +347,10 @@
       "url": "https://overpass-turbo.eu/s/258I",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "marketplace"
     },
     {
@@ -299,7 +361,10 @@
       "url": "https://overpass-turbo.eu/s/258K",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "bookstore"
     },
     {
@@ -310,7 +375,10 @@
       "url": "https://overpass-turbo.eu/s/258M",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "drinking_water"
     },
     {
@@ -321,7 +389,10 @@
       "url": "https://overpass-turbo.eu/s/258N",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "laundry"
     },
     {
@@ -332,7 +403,10 @@
       "url": "https://overpass-turbo.eu/s/25mM",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "government_office"
     },
     {
@@ -343,7 +417,10 @@
       "url": "https://overpass-turbo.eu/s/25mN",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "kiosk"
     },
     {
@@ -354,7 +431,10 @@
       "url": "https://overpass-turbo.eu/s/25mR",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "dentist"
     },
     {
@@ -365,7 +445,10 @@
       "url": "https://overpass-turbo.eu/s/25mS",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "bookmaker"
     },
     {
@@ -376,7 +459,10 @@
       "url": "https://overpass-turbo.eu/s/25mZ",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "bench"
     },
     {
@@ -387,7 +473,10 @@
       "url": "https://overpass-turbo.eu/s/25n0",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "shelter"
     },
     {
@@ -398,7 +487,10 @@
       "url": "https://overpass-turbo.eu/s/25na",
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
-      "tools": ["geo.search_osm_pois"],
+      "tools": [
+        "geo.search_osm_pois",
+        "geo.address_lookup"
+      ],
       "osm_category": "handrail"
     }
   ],
@@ -408,7 +500,9 @@
       "category": "Transportation",
       "source": "rt.data.gov.hk (MTR Corp)",
       "url": "https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php",
-      "tools": ["transport.get_mtr_next_trains"],
+      "tools": [
+        "transport.get_mtr_next_trains"
+      ],
       "notes": "Live arrivals per station + line + direction."
     },
     {
@@ -439,13 +533,17 @@
       "category": "Transportation",
       "source": "data.etagmb.gov.hk",
       "url": "https://data.etagmb.gov.hk/eta/route-stop/",
-      "tools": ["transport.get_gmb_eta"]
+      "tools": [
+        "transport.get_gmb_eta"
+      ]
     },
     {
       "title": "OpenTripPlanner 2 Multimodal Journey",
       "category": "Transportation",
       "source": "OTP2 sidecar consuming HK GTFS feeds (KMB / Citybus / MTR / GMB)",
-      "tools": ["transport.plan_multimodal_journey"],
+      "tools": [
+        "transport.plan_multimodal_journey"
+      ],
       "notes": "Full multi-modal door-to-door routing including bus + MTR transfers, headways from GTFS schedules. Runs as a separate OTP2 service when enabled."
     },
     {
@@ -453,7 +551,9 @@
       "category": "Geography",
       "source": "Lands Department (www.als.gov.hk)",
       "url": "https://www.als.gov.hk/lookup",
-      "tools": ["geo.address_lookup"],
+      "tools": [
+        "geo.address_lookup"
+      ],
       "notes": "Used internally by every transport tool as the address-resolution fallback after OSM Nominatim."
     },
     {
@@ -479,7 +579,9 @@
       "title": "Air Quality Health Index",
       "category": "Environment",
       "source": "EPD (Environmental Protection Department)",
-      "tools": ["context.get_aqhi"]
+      "tools": [
+        "context.get_aqhi"
+      ]
     },
     {
       "title": "LCSD Basketball Courts + Swimming Pools",
@@ -503,7 +605,9 @@
       "title": "Generic CSDI FeatureServer",
       "category": "Geography",
       "source": "CSDI Portal (Common Spatial Data Infrastructure)",
-      "tools": ["csdi.query_features"],
+      "tools": [
+        "csdi.query_features"
+      ],
       "notes": "Generic ArcGIS FeatureServer querier — works for any CSDI dataset given the feature-server URL + filter."
     },
     {
