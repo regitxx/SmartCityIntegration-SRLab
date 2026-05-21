@@ -2,6 +2,44 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.5.0] — 2026-05-21
+
+**Coverage architecture overhaul** — four composing fixes that target the structural failure modes the partial 10k report exposed. The v0.4.17 release was prompt-engineering patches; this one removes the *shapes* that allowed those bugs.
+
+| Failure class in the 10k report | What was wrong | Fix |
+|---|---|---|
+| Hit-rate metric meaningless (any of two tools = "hit") | `expected_tools & fired_tools != ∅` scored a half-chain identically to a complete chain | **Fix 2**: contracts-based judge in `smcity_fuzz/contracts.py`. Each dataset declares what *success* means as code, not a list of strings. New buckets: `complete`, `partial_chain`, `wrong_tool`, `no_tool`, plus the transport-level error buckets. |
+| 30 POI kinds buried behind one `geo.search_osm_pois` `category` Literal | LLM had to pick this tool then pick the right enum value from 30 strings in description prose | **Fix 1**: split into 30 thin tools — `geo.find_dentist`, `geo.find_bench`, `geo.find_convenience_store`, …. Tool routing is what frontier models do well; string-enum routing is what they hallucinate on. Auto-generated from `_CATEGORIES` so the table is the only source of truth. |
+| Chain stopped at `geo.address_lookup` for POI questions | Prompt asked the LLM to remember the chain; structure didn't enforce it | **Fix 3**: orchestrator post-condition check. If `address_lookup` fired ok, no `geo.find_*` did, and the user's question is POI-shaped, issue one structured retry pre-loaded with the resolved lat/lng. |
+| 10k corpus was English-only despite Cantonese being priority language | Generator hardcoded `_SYSTEM_PROMPT` for English; runner sent `language` field the agent ignored | **Fix 4**: multilingual stratified generator (`en` / `yue` / `zh-Hant` / `zh-Hans`), language-specific few-shot blocks, runner sets `locale_override` so per-language hit-rate is honest. |
+
+### Files changed
+
+- `smcity/tools/osm_pois.py` — rewritten end-to-end. Exports `OSM_POI_TOOLS` (list of 30 `ToolSpec`) instead of the single `SEARCH_OSM_POIS_TOOL`. Each tool's args drop the `category` field; the slug is bound at factory time.
+- `smcity/tools/__init__.py` — registers `*OSM_POI_TOOLS` in place of the mega-tool.
+- `smcity/langrouter/coverage.py` — seeds language coverage for all 30 POI tool names from `POI_TOOL_NAMES`.
+- `smcity/prompts.py` — the 14-line POI guidance block compressed to a 4-line pointer (the new tool names are self-documenting).
+- `smcity/orchestrator.py` — POI chain-completion check between tool execution and final synthesis. Two helpers added: `_incomplete_poi_chain`, `_coord_hint_from_lookup`.
+- `smcity_fuzz/contracts.py` — **new file**. `evaluate(row) -> Verdict` is the single source of judgment truth. 48 contracts (35 datasets + 13 additional integrations) generated from factories so there is no copy-paste.
+- `smcity_fuzz/coverage_report.py` — delegates judgment to `contracts.evaluate`. Bucket columns: `complete / partial / wrong-tool / no-tool / errors / timeouts`. `complete_rate` replaces `expected_tool_hit_rate` (the latter is emitted as an alias for one release so the existing /coverage UI keeps working).
+- `smcity_fuzz/coverage_gen.py` — `--languages en,yue,zh-Hant,zh-Hans` flag, per-language system prompt + few-shot, language-stratified cell loop, `language` field per row.
+- `smcity_fuzz/coverage_run.py` — sends `locale_override` so the agent answers in the corpus language.
+- `smcity_fuzz/cli.py` — pipes `--languages` through to `coverage generate`.
+- `smcity_fuzz/datasets.py` — fuzz topic `expected_tools` migrated to per-category names.
+- `data/coverage_catalog.json` — 30 OSM POI entries have `geo.search_osm_pois` replaced with `geo.find_<category>`.
+- `tests/test_osm_gmb_forecast.py` — uses new per-category tool names.
+
+### Why this is an architectural fix and not a patch
+
+- **No new heuristics inside the agent.** The chain check is a post-condition, not a category guesser. The orchestrator does not encode which categories exist; the LLM is told `geo.find_*` exists and given the lat/lng, then makes the call.
+- **No parallel sources of truth.** The 30 POI categories live in one table (`_CATEGORIES`). Tool names, contract registry, and language coverage are derived. Renaming a category in one place updates all three.
+- **Judge is code, not strings.** A contract is a function that can inspect *anything* in the result row. The catalog's `tools:` field is now narrative metadata only.
+- **271 tests still green.** Nothing in the surrounding codebase needed to change beyond the trivial rename to the new tool names.
+
+### Image
+
+`smcity:0.5.0` — built but not deployed. Deploy with `./deploy.sh` to start the v2 multilingual 10k run.
+
 ## [0.4.17] — 2026-05-20
 
 **Fixes from the partial 10k coverage results (7268/9442).**

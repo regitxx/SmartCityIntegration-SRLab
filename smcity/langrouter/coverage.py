@@ -30,7 +30,8 @@ DATASET_COVERAGE: dict[str, set[SupportedLang]] = {
     # Context
     "context.get_9day_forecast": {"en", "zh-Hant", "zh-Hans"},
     # Geo — OpenStreetMap (multilingual tags; EN/繁體 usually populated).
-    "geo.search_osm_pois": {"en", "zh-Hant", "zh-Hans"},
+    # Per-category POI tools are inserted at module load via the loop below
+    # so we don't repeat 30 entries here.
     # Context — from 02_datagovhk_housing_context_apis.md
     "context.get_current_weather": {"en", "zh-Hant", "zh-Hans"},
     "context.get_active_warnings": {"en", "zh-Hant", "zh-Hans"},
@@ -46,6 +47,18 @@ DATASET_COVERAGE: dict[str, set[SupportedLang]] = {
     # CSDI generic ArcGIS FeatureServer querier (bilingual attributes per dataset).
     "csdi.query_features": {"en", "zh-Hant"},
 }
+
+# Populate the 30 per-category POI tool entries from the same source of
+# truth used by the registry. Done at module-import time so DATASET_COVERAGE
+# stays a flat dict for everything downstream.
+def _seed_osm_poi_coverage() -> None:
+    from smcity.tools.osm_pois import POI_TOOL_NAMES  # local import — avoids cycle at module top
+
+    for tool_name in POI_TOOL_NAMES:
+        DATASET_COVERAGE[tool_name] = {"en", "zh-Hant", "zh-Hans"}
+
+
+_seed_osm_poi_coverage()
 
 # Maps our internal primary_lang codes → the user's query language tag to use
 # when calling upstream. Cantonese and Mandarin collapse to zh-Hant for the

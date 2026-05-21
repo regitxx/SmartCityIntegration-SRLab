@@ -1,18 +1,21 @@
 # ruff: noqa: RUF002  # en-dash in docstring prose is intentional.
-"""OpenStreetMap POI search via Overpass API.
+"""OpenStreetMap POI search via Overpass API — one thin tool per category.
 
-Covers 30 POI categories from the project's Selected Smart City Data Maps
-workbook (S514–S549) behind a single tool. Each category maps to one or more
-OSM tag filters. Results are deduplicated and trimmed to a configurable max.
+The old `geo.search_osm_pois` mega-tool packed 30 POI kinds behind a single
+`category` Literal. The LLM had to (1) pick this tool, (2) pick the right
+enum value from 30 string options buried in description prose. That second
+step is where the model hallucinated or fell back to general knowledge —
+particularly for niche kinds (bench, kiosk, dentist, handrail).
 
-Why OSM not data.gov.hk: for these POI categories (convenience stores,
-toilets, MTR entrances, public elevators, dentists, benches, …) there is no
-single HK-government dataset with the full coverage. The Selected list
-explicitly routes these to Overpass. That's what we ship.
+We export 30 named tools instead — `geo.find_dentist`, `geo.find_bench`,
+`geo.find_convenience_store`, … — generated from the same `_CATEGORIES`
+table. Tool routing is the operation frontier models are actually trained
+to do well; string-enum routing is the operation they hallucinate on.
 """
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -28,16 +31,14 @@ _HK_BBOX = (22.15, 113.83, 22.58, 114.44)
 
 
 # Category → list of Overpass tag filters. Each filter matches the
-# "(node|way)[key=value]" pattern Overpass expects. Covers every entry from
-# the project workbook's POI + road-facility sections.
+# "(node|way)[key=value]" pattern Overpass expects.
 @dataclass(slots=True, frozen=True)
 class _TagSpec:
     keys: list[tuple[str, str | None]]  # (key, value or None for presence check)
-    # When value is None, we match any presence of the key (e.g. `bench=*`).
 
 
 _CATEGORIES: dict[str, _TagSpec] = {
-    # Shops
+    # Shops (S514–S530 in the project workbook)
     "convenience_store": _TagSpec([("shop", "convenience")]),
     "supermarket": _TagSpec([("shop", "supermarket")]),
     "hardware_store": _TagSpec([("shop", "hardware")]),
@@ -55,7 +56,7 @@ _CATEGORIES: dict[str, _TagSpec] = {
     "laundry": _TagSpec([("shop", "laundry")]),
     "kiosk": _TagSpec([("shop", "kiosk")]),
     "bookmaker": _TagSpec([("shop", "bookmaker")]),
-    # Amenities
+    # Amenities (S531–S540)
     "public_toilet": _TagSpec([("amenity", "toilets")]),
     "place_of_worship": _TagSpec([("amenity", "place_of_worship")]),
     "recycling_location": _TagSpec([("amenity", "recycling")]),
@@ -64,7 +65,7 @@ _CATEGORIES: dict[str, _TagSpec] = {
     "drinking_water": _TagSpec([("amenity", "drinking_water")]),
     "government_office": _TagSpec([("office", "government")]),
     "dentist": _TagSpec([("amenity", "dentist"), ("healthcare", "dentist")]),
-    # Infrastructure / road facilities
+    # Infrastructure / road facilities (S541–S549)
     "mtr_station_entrance": _TagSpec([("railway", "subway_entrance")]),
     "public_elevator": _TagSpec([("highway", "elevator")]),
     "bench": _TagSpec([("amenity", "bench"), ("bench", "yes")]),
@@ -72,43 +73,46 @@ _CATEGORIES: dict[str, _TagSpec] = {
     "handrail": _TagSpec([("handrail", "yes")]),
 }
 
+# Human-readable label per slug — used in each tool's description so the
+# LLM sees "Find dentists near a point" instead of `find_dentist`.
+_LABELS: dict[str, str] = {
+    "convenience_store": "convenience stores (7-Eleven, Circle K, VanGO, etc.)",
+    "supermarket": "supermarkets",
+    "hardware_store": "hardware stores",
+    "hairdresser": "hairdressers and barbershops",
+    "clothes_shop": "clothing shops",
+    "electronics_shop": "electronics shops",
+    "department_store": "department stores",
+    "variety_store": "variety / dollar stores (Japan Home, 多多, etc.)",
+    "houseware_shop": "houseware shops",
+    "beauty_shop": "beauty supply / cosmetics shops",
+    "optician": "opticians",
+    "shoe_shop": "shoe shops",
+    "greengrocer": "greengrocers / fruit-and-vegetable shops",
+    "bookstore": "bookstores",
+    "laundry": "laundromats and dry cleaners",
+    "kiosk": "kiosks and news stands",
+    "bookmaker": "betting shops (Jockey Club off-course branches)",
+    "public_toilet": "public toilets",
+    "place_of_worship": "places of worship (temples, churches, mosques)",
+    "recycling_location": "recycling collection points",
+    "veterinarian": "veterinarians / animal clinics",
+    "marketplace": "wet markets and open marketplaces",
+    "drinking_water": "public drinking water fountains",
+    "government_office": "government offices",
+    "dentist": "dentists",
+    "mtr_station_entrance": "MTR station entrances and exits",
+    "public_elevator": "public elevators (street / footbridge lifts)",
+    "bench": "public benches",
+    "shelter": "public shelters and awnings",
+    "handrail": "public handrails and railings",
+}
 
-Category = Literal[
-    "convenience_store",
-    "supermarket",
-    "hardware_store",
-    "hairdresser",
-    "clothes_shop",
-    "electronics_shop",
-    "department_store",
-    "variety_store",
-    "houseware_shop",
-    "beauty_shop",
-    "optician",
-    "shoe_shop",
-    "greengrocer",
-    "bookstore",
-    "laundry",
-    "kiosk",
-    "bookmaker",
-    "public_toilet",
-    "place_of_worship",
-    "recycling_location",
-    "veterinarian",
-    "marketplace",
-    "drinking_water",
-    "government_office",
-    "dentist",
-    "mtr_station_entrance",
-    "public_elevator",
-    "bench",
-    "shelter",
-    "handrail",
-]
+
+# --- argument + result schemas (shared across all 30 tools) ---------------
 
 
-class SearchOsmArgs(BaseModel):
-    category: Category = Field(description="POI category — must be one of the 30 supported kinds.")
+class FindPoiArgs(BaseModel):
     lat: float | None = Field(default=None, ge=-90, le=90)
     lng: float | None = Field(default=None, ge=-180, le=180)
     radius_m: int = Field(
@@ -136,11 +140,14 @@ class OsmPoi(BaseModel):
     tags: dict[str, str] = Field(default_factory=dict)
 
 
-class SearchOsmResult(BaseModel):
-    category: Category
+class FindPoiResult(BaseModel):
+    category: str  # the slug, e.g. "dentist"
     bbox_used: tuple[float, float, float, float]
     pois: list[OsmPoi]
     source: str = "openstreetmap.org (Overpass)"
+
+
+# --- Overpass query construction ------------------------------------------
 
 
 def _build_query(category: str, bbox: tuple[float, float, float, float]) -> str:
@@ -163,26 +170,30 @@ def _bbox_from_point(lat: float, lng: float, radius_m: int) -> tuple[float, floa
     return (lat - dlat, lng - dlng, lat + dlat, lng + dlng)
 
 
-async def _handler(args: SearchOsmArgs, ctx: ToolContext) -> SearchOsmResult:
+def _resolve_bbox(args: FindPoiArgs) -> tuple[float, float, float, float]:
     if (
         args.min_lat is not None
         and args.min_lng is not None
         and args.max_lat is not None
         and args.max_lng is not None
     ):
-        bbox = (args.min_lat, args.min_lng, args.max_lat, args.max_lng)
-    elif args.lat is not None and args.lng is not None:
-        bbox = _bbox_from_point(args.lat, args.lng, args.radius_m)
-    else:
-        bbox = _HK_BBOX
+        return (args.min_lat, args.min_lng, args.max_lat, args.max_lng)
+    if args.lat is not None and args.lng is not None:
+        return _bbox_from_point(args.lat, args.lng, args.radius_m)
+    return _HK_BBOX
 
-    query = _build_query(args.category, bbox)
+
+async def _search_one_category(
+    category: str, args: FindPoiArgs, _ctx: ToolContext
+) -> FindPoiResult:
+    bbox = _resolve_bbox(args)
+    query = _build_query(category, bbox)
     try:
         async with httpx.AsyncClient(timeout=20.0) as h:
             r = await h.post(
                 OVERPASS_URL,
                 data={"data": query},
-                headers={"User-Agent": "smcity-hk-agent/0.3"},
+                headers={"User-Agent": "smcity-hk-agent/0.5"},
             )
             r.raise_for_status()
             data = r.json()
@@ -246,42 +257,66 @@ async def _handler(args: SearchOsmArgs, ctx: ToolContext) -> SearchOsmResult:
         if len(pois) >= args.max_results:
             break
 
-    return SearchOsmResult(category=args.category, bbox_used=bbox, pois=pois)
+    return FindPoiResult(category=category, bbox_used=bbox, pois=pois)
 
 
-SEARCH_OSM_POIS_TOOL: ToolSpec[SearchOsmArgs, SearchOsmResult] = ToolSpec(
-    name="geo.search_osm_pois",
-    description_en=(
-        "ALWAYS use this for 'where is the nearest …' or 'find a … near X' "
-        "queries in Hong Kong. Covers 30 categories from the project's "
-        "Selected Smart City Data Maps — including niche ones the LLM may "
-        "be tempted to skip:\n"
-        "  shops:  convenience_store, supermarket, hardware_store, "
-        "hairdresser, clothes_shop, electronics_shop, department_store, "
-        "variety_store, houseware_shop, beauty_shop, optician, shoe_shop, "
-        "greengrocer, bookstore, laundry, kiosk, bookmaker\n"
-        "  amenities: public_toilet, place_of_worship, recycling_location, "
-        "veterinarian, marketplace, drinking_water, government_office, "
-        "dentist\n"
-        "  infrastructure: mtr_station_entrance, public_elevator, bench, "
-        "shelter, handrail\n"
-        "Even bench, kiosk, drinking_water, handrail, recycling_location — "
-        "they ARE in OSM and you SHOULD call this tool, not guess from "
-        "general knowledge. Pattern: call `geo.address_lookup` for the "
-        "named landmark first (in parallel) to get coords, then this tool "
-        "with the matching category + those coords + radius_m. Returns up "
-        "to max_results deduplicated POIs with coords + name/brand/"
-        "opening_hours when tagged. Do NOT use this for MTR/KMB/Citybus "
-        "schedules (those have live operator APIs)."
-    ),
-    args_schema=SearchOsmArgs,
-    result_schema=SearchOsmResult,
-    handler=_handler,
-    ttl_seconds=60 * 60,  # cached; OSM data churns slowly
-    budget_ms=8000,  # Overpass can be slow
-    upstream_langs=frozenset({"en", "zh-Hant", "zh-Hans"}),
-    upstream="overpass-api.de",
-)
+# --- factory: one ToolSpec per category -----------------------------------
 
 
-__all__ = ["SEARCH_OSM_POIS_TOOL", "Category"]
+def _make_handler(category: str) -> Callable[[FindPoiArgs, ToolContext], Awaitable[FindPoiResult]]:
+    """Bind the category to a closure so each ToolSpec has its own handler.
+
+    Done as a top-level function (not a comprehension lambda) so the binding
+    is explicit and unambiguous — each call creates a fresh closure over its
+    own `category` argument.
+    """
+
+    async def _handler(args: FindPoiArgs, ctx: ToolContext) -> FindPoiResult:
+        return await _search_one_category(category, args, ctx)
+
+    return _handler
+
+
+def _make_poi_tool(slug: str) -> ToolSpec[FindPoiArgs, FindPoiResult]:
+    label = _LABELS[slug]
+    return ToolSpec(
+        name=f"geo.find_{slug}",
+        description_en=(
+            f"Find {label} near a point in Hong Kong. Returns up to "
+            "max_results POIs with coords, names, and tags (brand, "
+            "opening_hours, wheelchair access when tagged). Call "
+            "`geo.address_lookup` first if you only have a place name, "
+            "then pass that lat/lng here."
+        ),
+        args_schema=FindPoiArgs,
+        result_schema=FindPoiResult,
+        handler=_make_handler(slug),
+        ttl_seconds=60 * 60,  # OSM data churns slowly
+        budget_ms=8000,  # Overpass can be slow
+        upstream_langs=frozenset({"en", "zh-Hant", "zh-Hans"}),
+        upstream="overpass-api.de",
+    )
+
+
+OSM_POI_TOOLS: list[ToolSpec[FindPoiArgs, FindPoiResult]] = [
+    _make_poi_tool(slug) for slug in _CATEGORIES
+]
+
+
+# Public mapping: slug → full tool name. Used by smcity_fuzz.contracts to
+# express "the right tool for OSM category X is geo.find_X" without each
+# contract having to hard-code 30 strings.
+POI_TOOL_NAME: dict[str, str] = {slug: f"geo.find_{slug}" for slug in _CATEGORIES}
+
+# Reverse lookup for the orchestrator's chain-completion check (Fix 3).
+POI_TOOL_NAMES: frozenset[str] = frozenset(POI_TOOL_NAME.values())
+
+
+__all__ = [
+    "FindPoiArgs",
+    "FindPoiResult",
+    "OSM_POI_TOOLS",
+    "OsmPoi",
+    "POI_TOOL_NAME",
+    "POI_TOOL_NAMES",
+]

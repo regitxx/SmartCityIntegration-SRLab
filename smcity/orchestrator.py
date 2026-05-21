@@ -272,6 +272,83 @@ class Orchestrator:
                         ),
                     }
                 )
+
+            # --- POI chain-completion enforcement ----------------------------
+            # If geo.address_lookup ran successfully but no geo.find_* did,
+            # and the user's question is POI-shaped, give the LLM one more
+            # tool-call turn with the lat/lng pre-quoted. This catches the
+            # "agent returns coordinates and stops" failure mode the prompt
+            # tries to prevent — but as a structural post-condition, not a
+            # plea. See smcity_fuzz.contracts._poi_chain_contract.
+            if _incomplete_poi_chain(safe_text, tool_results):
+                coord_hint = _coord_hint_from_lookup(tool_results)
+                if coord_hint:
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                f"You called geo.address_lookup and got "
+                                f"{coord_hint}, but you did NOT call a "
+                                "geo.find_* POI tool. The user asked a POI / "
+                                "'where is the nearest …' question. Call the "
+                                "matching geo.find_<category> tool NOW with "
+                                "those coordinates. Do not synthesise a reply "
+                                "yet."
+                            ),
+                        }
+                    )
+                    try:
+                        retry = await chat(
+                            messages,
+                            tools=self._registry.openai_schemas(),
+                            parallel_tool_calls=True,
+                            session_id=req.session_id,
+                            known_tool_names=set(self._registry.names()),
+                        )
+                    except LLMError:
+                        retry = None
+                    if retry and retry.tool_calls:
+                        retry_results = await self._run_parallel(
+                            retry.tool_calls, slots, detection, _emit
+                        )
+                        self._append_trace_and_citations(
+                            retry_results, tool_trace, citations, detection
+                        )
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": retry.text or "",
+                                "tool_calls": [
+                                    {
+                                        "id": tc["id"],
+                                        "type": "function",
+                                        "function": {
+                                            "name": tc["name"],
+                                            "arguments": tc["arguments"],
+                                        },
+                                    }
+                                    for tc in retry.tool_calls
+                                ],
+                            }
+                        )
+                        for res in retry_results:
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": _id_for(
+                                        retry.tool_calls, res.name, res.args
+                                    ),
+                                    "content": json.dumps(
+                                        {
+                                            "status": res.status,
+                                            "result": res.result,
+                                            "error": res.error,
+                                        },
+                                        ensure_ascii=False,
+                                    ),
+                                }
+                            )
+
             # Post-tool reminder — prevents the "Chinese in tool output pulled the
             # reply into Cantonese/Mandarin" register bug.
             messages.append({"role": "system", "content": language_stick_reminder(detection)})
@@ -561,6 +638,57 @@ def _rewrite_source_footer(text: str, citations: list[Citation]) -> str:
 def _localise_chitchat(canned: str, d: LangDetection) -> str:
     # Chitchat table returns a reply-per-language already; no extra logic needed.
     return canned
+
+
+# Matches the rough shape of a POI / nearest-X question in EN + Cantonese +
+# Mandarin. False positives are cheap (one extra LLM round-trip); false
+# negatives leave the chain-completion check unfired so they cost more.
+# Keep this generous.
+_POI_QUESTION_RE = re.compile(
+    r"""
+    nearest | closest | near\s+me | nearby | around | find\s+a | find\s+the
+    | where\s+is | where\s+can\s+i\s+find | how\s+do\s+i\s+find
+    | dentist | toilet | convenience | supermarket | pharmacy | bench
+    | shelter | kiosk | drinking\s+water | recycling | optician | barber
+    | hairdresser | clothes\s+shop | bookstore | laundry | greengrocer
+    | place\s+of\s+worship | temple | church | mosque | mtr\s+entrance
+    | elevator | lift | handrail | marketplace | wet\s+market
+    | 最近 | 附近 | 邊度有 | 邊度可以 | 揾.*喺邊 | 搵.*喺邊
+    | 點樣搵 | 邊間 | 有冇.*喺
+    | 哪里 | 哪裏 | 附近 | 最近的 | 在哪
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _incomplete_poi_chain(user_text: str, tool_results: list[ToolResult]) -> bool:
+    """True when the agent called geo.address_lookup but never the matching
+    POI tool, on a question that looks POI-shaped."""
+    ok_names = {r.name for r in tool_results if r.status == "ok"}
+    if "geo.address_lookup" not in ok_names:
+        return False
+    if any(name.startswith("geo.find_") for name in ok_names):
+        return False
+    return bool(_POI_QUESTION_RE.search(user_text or ""))
+
+
+def _coord_hint_from_lookup(tool_results: list[ToolResult]) -> str | None:
+    """Pull the first lat/lng pair out of a successful geo.address_lookup
+    result. Used to remind the LLM in the chain-completion retry."""
+    for r in tool_results:
+        if r.name != "geo.address_lookup" or r.status != "ok" or not r.result:
+            continue
+        candidates = r.result.get("candidates") or []
+        if not candidates:
+            continue
+        first = candidates[0]
+        lat = first.get("lat")
+        lng = first.get("lng") or first.get("lon")
+        name = first.get("name_en") or first.get("name") or "the resolved point"
+        if lat is None or lng is None:
+            continue
+        return f"lat={lat}, lng={lng} ({name})"
+    return None
 
 
 def _detection_from_override(code: str, carried: LangDetection) -> LangDetection:

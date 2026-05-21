@@ -1,18 +1,15 @@
 """Coverage suite analyzer + markdown reporter.
 
-Reads the JSONL output of coverage_run.py, reconciles each turn against
-the coverage_catalog (which dataset was the question generated FOR and
-which tools SHOULD have fired) and writes:
+Reads the JSONL output of coverage_run.py and runs each row through
+`smcity_fuzz.contracts.evaluate`, which returns a semantic verdict
+(`complete` / `partial_chain` / `wrong_tool` / `no_tool` / error
+variants) rather than the old string-intersection check.
 
+Outputs:
   * a markdown report grouped by dataset with per-row success/failure
     counts and sample failing questions,
   * a JSON summary file ready to feed the /coverage page's "tested
     coverage" section.
-
-The match logic is intentionally lenient: a turn is "covered" if any of
-the `expected_tools` for its target dataset appears in the actual
-tool_trace. We bucket the rest of the turns by failure mode so the
-report tells you WHY coverage is missing — not just THAT it is.
 
 Usage::
 
@@ -34,6 +31,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from smcity_fuzz.contracts import BUCKET_LABELS, OK_BUCKETS, evaluate
+
 
 def _read_results(path: Path) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
@@ -49,17 +48,7 @@ def _read_results(path: Path) -> list[dict[str, Any]]:
     return out
 
 
-_FAILURE_LABELS: dict[str, str] = {
-    "ok_expected_tool": "ok — expected tool fired",
-    "ok_other_tool": "ok — different tool fired",
-    "ok_no_tool": "ok — agent answered without a tool (chitchat / fast-path / cached)",
-    "error_status": "agent returned status != ok",
-    "timeout": "request timed out",
-    "http_error": "HTTP non-200 from /turn",
-    "network_error": "network / connection failure",
-    "empty_reply": "agent replied with empty text",
-    "geocoder_collision": "geocoder collision (origin = destination)",
-}
+_FAILURE_LABELS: dict[str, str] = dict(BUCKET_LABELS)
 
 
 @dataclass
@@ -68,36 +57,9 @@ class DatasetReport:
     total: int = 0
     buckets: Counter[str] = field(default_factory=Counter)
     sample_failures: list[dict[str, Any]] = field(default_factory=list)
-    expected_tool_hit_rate: float = 0.0
+    complete_rate: float = 0.0
     avg_elapsed_ms: float = 0.0
     tool_fire_counts: Counter[str] = field(default_factory=Counter)
-
-
-def _categorise(row: dict[str, Any]) -> str:
-    """Bucket a result row into a single failure-mode label."""
-    if row.get("status") == "timeout":
-        return "timeout"
-    if row.get("status") == "http_error":
-        return "http_error"
-    if row.get("status") == "network_error":
-        return "network_error"
-    if row.get("status") != "ok":
-        return "error_status"
-    reply = (row.get("reply_text") or "").strip()
-    trace = row.get("tool_trace") or []
-    expected = set(row.get("expected_tools") or [])
-    fired = {t["name"] for t in trace if isinstance(t, dict)}
-    # Geocoder collision shows up as a 'resolved to nearly the same' phrase
-    # in the reply (the collision guard) — bucket explicitly.
-    if "resolved to nearly the same" in reply:
-        return "geocoder_collision"
-    if not reply:
-        return "empty_reply"
-    if expected & fired:
-        return "ok_expected_tool"
-    if fired:
-        return "ok_other_tool"
-    return "ok_no_tool"
 
 
 def analyse(results: Sequence[dict[str, Any]]) -> dict[str, DatasetReport]:
@@ -109,12 +71,14 @@ def analyse(results: Sequence[dict[str, Any]]) -> dict[str, DatasetReport]:
         report = by_dataset[ds_id]
         report.dataset_id = ds_id
         report.total += 1
-        bucket = _categorise(row)
+        verdict = evaluate(row)
+        bucket = verdict.bucket
         report.buckets[bucket] += 1
-        if not bucket.startswith("ok_") and len(report.sample_failures) < 5:
+        if bucket not in OK_BUCKETS and len(report.sample_failures) < 5:
             report.sample_failures.append(
                 {
                     "bucket": bucket,
+                    "reason": verdict.reason,
                     "question": row.get("question_en", "")[:200],
                     "reply": (row.get("reply_text") or "")[:200],
                     "tools_fired": [t["name"] for t in row.get("tool_trace") or []],
@@ -130,8 +94,8 @@ def analyse(results: Sequence[dict[str, Any]]) -> dict[str, DatasetReport]:
                 report.tool_fire_counts[t["name"]] += 1
 
     for r in by_dataset.values():
-        n_ok_expected = r.buckets.get("ok_expected_tool", 0)
-        r.expected_tool_hit_rate = n_ok_expected / r.total if r.total else 0.0
+        n_complete = sum(r.buckets.get(b, 0) for b in OK_BUCKETS)
+        r.complete_rate = n_complete / r.total if r.total else 0.0
 
     return dict(by_dataset)
 
@@ -180,10 +144,10 @@ def render_markdown(
     lines.append("## Per-dataset breakdown")
     lines.append("")
     lines.append(
-        "| dataset | title | total | ok (expected) | ok (other) | no-tool | "
-        "errors | timeouts | hit rate | avg ms |"
+        "| dataset | title | total | complete | partial | wrong-tool | no-tool | "
+        "errors | timeouts | complete % | avg ms |"
     )
-    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for ds_id in sorted(by_dataset.keys()):
         r = by_dataset[ds_id]
         title = catalog_title.get(ds_id, "")
@@ -193,15 +157,17 @@ def render_markdown(
             + r.buckets.get("network_error", 0)
             + r.buckets.get("empty_reply", 0)
             + r.buckets.get("geocoder_collision", 0)
+            + r.buckets.get("unknown_dataset", 0)
         )
         lines.append(
             f"| `{ds_id}` | {title} | {r.total} | "
-            f"{r.buckets.get('ok_expected_tool', 0)} | "
-            f"{r.buckets.get('ok_other_tool', 0)} | "
-            f"{r.buckets.get('ok_no_tool', 0)} | "
+            f"{r.buckets.get('complete', 0)} | "
+            f"{r.buckets.get('partial_chain', 0)} | "
+            f"{r.buckets.get('wrong_tool', 0)} | "
+            f"{r.buckets.get('no_tool', 0)} | "
             f"{errs} | "
             f"{r.buckets.get('timeout', 0)} | "
-            f"{r.expected_tool_hit_rate:.0%} | "
+            f"{r.complete_rate:.0%} | "
             f"{r.avg_elapsed_ms:.0f} |"
         )
     lines.append("")
@@ -216,6 +182,8 @@ def render_markdown(
         lines.append("")
         for f in r.sample_failures:
             lines.append(f"- **[{f['bucket']}]** Q: {f['question']!r}")
+            if f.get("reason"):
+                lines.append(f"  - reason: {f['reason']}")
             lines.append(f"  - tools fired: `{f['tools_fired']}`")
             if f.get("reply"):
                 lines.append(f"  - reply: {f['reply']!r}")
@@ -224,14 +192,20 @@ def render_markdown(
 
 
 def render_summary_json(by_dataset: dict[str, DatasetReport]) -> dict[str, Any]:
-    """Compact JSON ready for the /coverage UI to consume."""
+    """Compact JSON ready for the /coverage UI to consume.
+
+    Both `complete_rate` (new, contract-based) and `expected_tool_hit_rate`
+    (kept for one release of backward-compatibility with the existing
+    /coverage page) are emitted; the UI should migrate to `complete_rate`.
+    """
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "datasets": [
             {
                 "dataset_id": r.dataset_id,
                 "total": r.total,
-                "expected_tool_hit_rate": round(r.expected_tool_hit_rate, 4),
+                "complete_rate": round(r.complete_rate, 4),
+                "expected_tool_hit_rate": round(r.complete_rate, 4),  # alias for v0.4.x UI
                 "avg_elapsed_ms": round(r.avg_elapsed_ms),
                 "buckets": dict(r.buckets),
                 "top_tools_fired": r.tool_fire_counts.most_common(5),

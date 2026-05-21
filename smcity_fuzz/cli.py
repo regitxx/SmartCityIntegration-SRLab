@@ -147,16 +147,17 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
 
     sub = args.coverage_sub
     if sub == "generate":
-        return coverage_gen.main(
-            [
-                f"--count={args.count}",
-                f"--gemma-model={args.gemma_model}",
-                f"--lm-base-url={args.lm_base_url}",
-                f"--out={args.out}",
-                f"--batch-size={args.batch_size}",
-                f"--concurrency={args.concurrency}",
-            ]
-        )
+        gen_argv = [
+            f"--count={args.count}",
+            f"--gemma-model={args.gemma_model}",
+            f"--lm-base-url={args.lm_base_url}",
+            f"--out={args.out}",
+            f"--batch-size={args.batch_size}",
+            f"--concurrency={args.concurrency}",
+        ]
+        if getattr(args, "languages", None):
+            gen_argv.append(f"--languages={args.languages}")
+        return coverage_gen.main(gen_argv)
     if sub == "run":
         argv: list[str] = [
             f"--questions={args.questions}",
@@ -291,6 +292,11 @@ def build_parser() -> argparse.ArgumentParser:
     cg.add_argument("--out", type=Path, required=True)
     cg.add_argument("--batch-size", type=int, default=25)
     cg.add_argument("--concurrency", type=int, default=2)
+    cg.add_argument(
+        "--languages",
+        default="en,yue,zh-Hant,zh-Hans",
+        help="Comma-separated language codes (en, yue, zh-Hant, zh-Hans).",
+    )
 
     cr = cov_sub.add_parser("run", help="Drive generated questions through /turn, save results")
     cr.add_argument("--questions", type=Path, required=True)

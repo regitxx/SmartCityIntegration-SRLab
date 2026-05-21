@@ -11,7 +11,7 @@ from smcity.tools.facility import FIND_NEARBY_COURTS_TOOL, FIND_NEARBY_POOLS_TOO
 from smcity.tools.geo import ADDRESS_LOOKUP_TOOL
 from smcity.tools.housing import GET_ESTATE_INFO_TOOL, LIST_ESTATES_TOOL
 from smcity.tools.meta import ASK_USER_TOOL, FORGET_ME_TOOL, WHAT_LANGUAGES_TOOL
-from smcity.tools.osm_pois import SEARCH_OSM_POIS_TOOL
+from smcity.tools.osm_pois import OSM_POI_TOOLS
 from smcity.tools.otp2 import PLAN_MULTIMODAL_JOURNEY_TOOL
 from smcity.tools.registry import ToolError, ToolRegistry, ToolResult, ToolSpec
 from smcity.tools.transport import MTR_NEXT_TRAINS_TOOL
@@ -34,7 +34,7 @@ def build_default_registry() -> ToolRegistry:
     for spec in (
         # geo
         ADDRESS_LOOKUP_TOOL,
-        SEARCH_OSM_POIS_TOOL,
+        *OSM_POI_TOOLS,  # 30 thin per-category POI tools (geo.find_dentist, …)
         # transport
         MTR_NEXT_TRAINS_TOOL,
         KMB_ETA_BY_STOP_TOOL,

@@ -79,17 +79,23 @@ async def _post_turn(
     """One /turn call. Wraps errors in a structured row so the analyzer
     can categorise failures."""
     session_id = f"cov-{question['id']}"
-    body = {
+    lang = question.get("language", "en")
+    # Force locale_override so the agent answers in the same language the
+    # corpus generated. Detection ambiguity (e.g. yue vs zh-Hant) would
+    # otherwise mask Cantonese-path regressions.
+    body: dict[str, Any] = {
         "session_id": session_id,
         "text": question["question_en"],
-        "language": question.get("language", "en"),
     }
+    if lang in {"en", "yue", "zh-Hant", "zh-Hans"}:
+        body["locale_override"] = lang
     started = time.perf_counter()
     base_row = {
         "question_id": question["id"],
         "expected_dataset_id": question.get("expected_dataset_id"),
         "expected_tools": question.get("expected_tools") or [],
         "question_en": question["question_en"],
+        "question_language": lang,
         "session_id": session_id,
         "ran_at": datetime.now(UTC).isoformat(),
     }
