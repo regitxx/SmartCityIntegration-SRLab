@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from smcity.geometry import haversine_m as _haversine_m
 from smcity.tools.geo import ALS_URL
-from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
+from smcity.tools.registry import ToolContext, ToolScope, ToolSpec, ToolUpstreamError
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -47,9 +47,7 @@ _HK_VIEWBOX = "113.83,22.56,114.43,22.15"
 
 # Nominatim's usage policy requires a meaningful User-Agent identifying
 # the application. https://operations.osmfoundation.org/policies/nominatim/
-_NOMINATIM_USER_AGENT = (
-    "smcity-agent/0.4.13 (Lab of Social Robotics; HK smart-city assistant)"
-)
+_NOMINATIM_USER_AGENT = "smcity-agent/0.4.13 (Lab of Social Robotics; HK smart-city assistant)"
 
 
 # ---------------------------------------------------------------------------
@@ -276,9 +274,7 @@ async def _resolve_pair(
 
     # Collision guard — geocoder produced the same point for both endpoints.
     if args.origin and args.destination:
-        sep_m = _haversine_m(
-            origin_pair[0], origin_pair[1], dest_pair[0], dest_pair[1]
-        )
+        sep_m = _haversine_m(origin_pair[0], origin_pair[1], dest_pair[0], dest_pair[1])
         if sep_m < _COLLISION_THRESHOLD_M:
             raise ToolUpstreamError(
                 f"Origin {args.origin!r} and destination {args.destination!r} "
@@ -354,6 +350,8 @@ PLAN_WALKING_TOOL: ToolSpec[PlanWalkingArgs, PlanWalkingResult] = ToolSpec(
     budget_ms=2500,
     upstream_langs=frozenset({"en", "zh-Hant"}),
     upstream="smcity.planner",
+    scope=ToolScope.SPECIALIZED,
+    domain="walking_only",
 )
 
 
@@ -451,9 +449,7 @@ def _recommendation(dist_m: float) -> str:
     return "mtr"
 
 
-async def _inline_mtr_leg(
-    o_lat: float, o_lng: float, d_lat: float, d_lng: float
-) -> JourneyOption:
+async def _inline_mtr_leg(o_lat: float, o_lng: float, d_lat: float, d_lng: float) -> JourneyOption:
     """Run the real Dijkstra MTR planner and embed the result as a JourneyOption.
 
     Earlier versions returned `mode=mtr, note='Call plan_simple_route'` and
@@ -569,6 +565,8 @@ PLAN_JOURNEY_TOOL: ToolSpec[PlanJourneyArgs, PlanJourneyResult] = ToolSpec(
     budget_ms=3500,
     upstream_langs=frozenset({"en", "zh-Hant"}),
     upstream="smcity.planner",
+    scope=ToolScope.DEFAULT,
+    domain="any_mode_journey",
 )
 
 

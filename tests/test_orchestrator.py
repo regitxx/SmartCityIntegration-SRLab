@@ -82,6 +82,10 @@ async def test_cantonese_mtr_query_triggers_tool_call(
 async def test_clarification_gate_via_meta_ask_user(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The ask_user_only_first_move gate fires here — but if the LLM
+    persists with the same ask_user proposal on the retry (or the retry
+    returns no tool calls), the orchestrator accepts it and surfaces the
+    clarification as before. Documents the gate-friendly fallback path."""
     first = LLMReply(
         text="",
         tool_calls=[
@@ -94,10 +98,23 @@ async def test_clarification_gate_via_meta_ask_user(
         usage={},
         elapsed_ms=80,
     )
+    # Gate retry — LLM persists with the same ask_user proposal.
+    gate_retry = LLMReply(
+        text="",
+        tool_calls=[
+            {
+                "id": "call-ask-retry",
+                "name": "meta.ask_user",
+                "arguments": json.dumps({"question": "搭 MTR、巴士定的士？", "slot": "mode"}),
+            }
+        ],
+        usage={},
+        elapsed_ms=70,
+    )
     second = LLMReply(text="(synthesised)", tool_calls=[], usage={}, elapsed_ms=40)
     from smcity import orchestrator as orch_module
 
-    monkeypatch.setattr(orch_module, "chat", _scripted_chat([first, second]))
+    monkeypatch.setattr(orch_module, "chat", _scripted_chat([first, gate_retry, second]))
 
     store = SessionStore(tmp_path / "sessions.sqlite3")
     orch = Orchestrator(store)
@@ -106,6 +123,71 @@ async def test_clarification_gate_via_meta_ask_user(
 
     assert "MTR" in resp.text
     assert resp.followups and "MTR" in resp.followups[0]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_ask_user_gate_redirects_llm_to_search_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate's success case: LLM proposed ask_user alone, gate fired,
+    LLM's retry picked a real search tool (transport.get_mtr_next_trains),
+    and the orchestrator dispatched THAT tool — never executing ask_user."""
+    respx.get(MTR_NEXT_TRAIN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "status": 1,
+                "data": {
+                    "ISL-CEN": {
+                        "UP": [{"dest": "CHW", "ttnt": "2", "seq": 1, "plat": "1"}],
+                        "DOWN": [{"dest": "KET", "ttnt": "3", "seq": 1, "plat": "2"}],
+                    }
+                },
+            },
+        )
+    )
+    bad_first = LLMReply(
+        text="",
+        tool_calls=[
+            {
+                "id": "call-ask",
+                "name": "meta.ask_user",
+                "arguments": json.dumps({"question": "Which station?", "slot": "venue_type"}),
+            }
+        ],
+        usage={},
+        elapsed_ms=80,
+    )
+    # Gate retry — LLM gets it right this time, calls the real tool.
+    good_retry = LLMReply(
+        text="",
+        tool_calls=[
+            {
+                "id": "call-mtr",
+                "name": "transport.get_mtr_next_trains",
+                "arguments": json.dumps({"station_name": "Central"}),
+            }
+        ],
+        usage={},
+        elapsed_ms=90,
+    )
+    synth = LLMReply(text="Next train in 2 min.", tool_calls=[], usage={}, elapsed_ms=30)
+    from smcity import orchestrator as orch_module
+
+    monkeypatch.setattr(orch_module, "chat", _scripted_chat([bad_first, good_retry, synth]))
+
+    store = SessionStore(tmp_path / "sessions.sqlite3")
+    orch = Orchestrator(store)
+    req = TurnRequest(session_id="gate-redirect-1", text="next train at central")
+    resp = await orch.handle_turn(req)
+
+    # Only the redirected tool was executed; ask_user was never dispatched.
+    executed_tools = [t.name for t in resp.tool_trace]
+    assert "transport.get_mtr_next_trains" in executed_tools
+    assert "meta.ask_user" not in executed_tools
+    # No followup was set because no ask_user fired.
+    assert not resp.followups
 
 
 @pytest.mark.asyncio

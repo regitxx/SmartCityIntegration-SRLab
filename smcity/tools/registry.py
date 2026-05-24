@@ -15,6 +15,7 @@ per-tool.
 
 from __future__ import annotations
 
+import enum
 import hashlib
 import json
 import time
@@ -61,6 +62,28 @@ class ToolContext:
     translation_applied: bool = False
 
 
+class ToolScope(enum.StrEnum):
+    """Where a tool sits in the LLM's selection hierarchy for its domain.
+
+    - DEFAULT: the go-to tool for queries in `domain`. The LLM should pick
+      this when the user's question matches `domain` without an explicit
+      qualifier that points elsewhere.
+    - SPECIALIZED: only valid when the user's text contains a qualifier
+      naming the specialization (e.g., MTR, Citybus, walking). The LLM
+      should not pick this for a generic query in the same broad domain.
+    - FALLBACK: last-resort tool. The LLM should try every other plausible
+      tool first.
+
+    The marker is auto-rendered as a prefix on the OpenAI schema description
+    by `ToolSpec.openai_schema()`. Tools without an explicit scope render
+    no marker (they read as plain DEFAULTs without a domain claim).
+    """
+
+    DEFAULT = "default"
+    SPECIALIZED = "specialized"
+    FALLBACK = "fallback"
+
+
 @dataclass(slots=True)
 class ToolSpec(Generic[ArgsT, ResultT]):  # noqa: UP046  # PEP 695 + dataclass has known gotchas
     name: str
@@ -74,14 +97,42 @@ class ToolSpec(Generic[ArgsT, ResultT]):  # noqa: UP046  # PEP 695 + dataclass h
     upstream_langs: frozenset[str] = field(default_factory=lambda: frozenset({"en"}))
     upstream: str = ""
     safety_class: str = "read"
+    # Scope + domain together produce the disambiguation marker the LLM sees.
+    # `domain` is a free-form slug (e.g., "mtr_only", "any_mode_journey",
+    # "kmb_lwb_bus_only") that groups tools that compete for the same query.
+    scope: ToolScope = ToolScope.DEFAULT
+    domain: str | None = None
+
+    def _scope_prefix(self) -> str:
+        """Render the `[DEFAULT: …]` / `[SPECIALIZED: …]` / `[FALLBACK]` tag.
+
+        Returns "" for the bare DEFAULT-without-domain case so tools that
+        opt out of scope tagging still render clean descriptions.
+        """
+        if self.scope == ToolScope.FALLBACK:
+            tag = "[FALLBACK]"
+        elif self.scope == ToolScope.SPECIALIZED:
+            tag = f"[SPECIALIZED: {self.domain}]" if self.domain else "[SPECIALIZED]"
+        elif self.scope == ToolScope.DEFAULT and self.domain:
+            tag = f"[DEFAULT: {self.domain}]"
+        else:
+            return ""
+        return f"{tag} "
 
     def openai_schema(self) -> dict[str, Any]:
-        """Emit the tool schema in the OpenAI function-calling format."""
+        """Emit the tool schema in the OpenAI function-calling format.
+
+        The description is auto-prefixed with the scope marker so the LLM
+        sees disambiguation on every tool — no per-tool wording edits needed
+        to add markers to a fleet of tools.
+        """
+        prefix = self._scope_prefix()
+        description = f"{prefix}{self.description_en}" if prefix else self.description_en
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description_en,
+                "description": description,
                 "parameters": self.args_schema.model_json_schema(),
             },
         }

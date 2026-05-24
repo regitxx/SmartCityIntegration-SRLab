@@ -15,7 +15,7 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, Field
 
-from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
+from smcity.tools.registry import ToolContext, ToolScope, ToolSpec, ToolUpstreamError
 
 GMB_BASE = "https://data.etagmb.gov.hk"
 
@@ -128,11 +128,12 @@ async def _eta_handler(args: GmbEtaArgs, ctx: ToolContext) -> GmbEtaResult:
 GMB_ETA_TOOL: ToolSpec[GmbEtaArgs, GmbEtaResult] = ToolSpec(
     name="transport.get_gmb_eta",
     description_en=(
-        "Live ETA for a Green Minibus (GMB) route at a specific stop. Input: "
-        "region (HKI / KLN / NT), route_code (e.g. '1', '23M'), 8-digit stop_id. "
-        "Requires a known stop_id — if you only have a stop name, ask the user "
-        "or defer to the KMB/Citybus tools instead. Returns next arrivals sorted "
-        "by ETA, plus the route's destination in EN + 繁體."
+        "Live ETA for a Green Minibus (GMB / 綠van) route at a specific stop. "
+        "Input: region (HKI / KLN / NT), route_code (e.g. '1', '23M'), 8-digit "
+        "stop_id. Requires a known stop_id — if you only have a stop name, ask "
+        "the user or defer to the KMB/Citybus tools instead. Returns next "
+        "arrivals sorted by ETA, plus the route's destination in EN + 繁體. "
+        "Do NOT use for KMB, Citybus, or red minibuses."
     ),
     args_schema=GmbEtaArgs,
     result_schema=GmbEtaResult,
@@ -141,6 +142,8 @@ GMB_ETA_TOOL: ToolSpec[GmbEtaArgs, GmbEtaResult] = ToolSpec(
     budget_ms=3000,
     upstream_langs=frozenset({"en", "zh-Hant", "zh-Hans"}),
     upstream="data.etagmb.gov.hk",
+    scope=ToolScope.SPECIALIZED,
+    domain="green_minibus_only",
 )
 
 

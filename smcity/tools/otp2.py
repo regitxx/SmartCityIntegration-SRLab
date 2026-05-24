@@ -28,7 +28,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field
 
-from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
+from smcity.tools.registry import ToolContext, ToolScope, ToolSpec, ToolUpstreamError
 
 OTP2_BASE_URL = os.environ.get("OTP2_BASE_URL", "http://127.0.0.1:8080/otp")
 OTP2_ROUTER = os.environ.get("OTP2_ROUTER", "default")
@@ -198,9 +198,12 @@ PLAN_MULTIMODAL_JOURNEY_TOOL: ToolSpec[PlanMultimodalArgs, PlanMultimodalResult]
         "using an OpenTripPlanner 2 sidecar built on HK GTFS feeds. Provide "
         "origin + destination as lat/lng. OPTIONAL modes filter accepts "
         "'TRANSIT'/'WALK'/'BUS'/'RAIL'/'SUBWAY'/'FERRY' or lowercase aliases. "
-        "Returns 1–5 itineraries, each with timed legs. If the sidecar is "
-        "offline the call raises an upstream error — fall back to "
-        "transport.plan_simple_route for MTR-only requests."
+        "Returns 1–5 itineraries, each with timed legs. Use ONLY when the user "
+        "asks for a full multi-leg journey across multiple modes; "
+        "transport.plan_journey is cheaper and sufficient for the common "
+        "walk-or-MTR case. If the sidecar is offline the call raises an "
+        "upstream error — fall back to transport.plan_simple_route for "
+        "MTR-only requests."
     ),
     args_schema=PlanMultimodalArgs,
     result_schema=PlanMultimodalResult,
@@ -209,4 +212,6 @@ PLAN_MULTIMODAL_JOURNEY_TOOL: ToolSpec[PlanMultimodalArgs, PlanMultimodalResult]
     budget_ms=5000,
     upstream_langs=frozenset({"en", "zh-Hant"}),
     upstream="otp2 (local sidecar)",
+    scope=ToolScope.SPECIALIZED,
+    domain="multimodal_journey",
 )

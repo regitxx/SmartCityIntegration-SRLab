@@ -2,6 +2,59 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.5.1] — 2026-05-24
+
+**Orchestrator lifecycle guard rails + tool scope tags** — promotes the v0.5.0 inline POI chain check (Fix 3) into a declarative engine, adds two sibling engines at the other LLM-turn lifecycle stages, and replaces ad-hoc tool-selection disambiguation prose with a structured `scope`/`domain` schema on every `ToolSpec`. The orchestrator now enforces three independent structural invariants per turn instead of relying on prompt nudges.
+
+### The lifecycle abstraction
+
+| Stage             | Module                              | Inputs                          | First rule registered            |
+|-------------------|-------------------------------------|---------------------------------|----------------------------------|
+| Pre-execution     | `smcity/tool_call_gates.py`         | LLM's proposed tool calls       | `ASK_USER_ONLY_GATE`             |
+| Post-execution    | `smcity/chain_rules.py`             | Tool results + user query       | `POI_CHAIN_RULE` (replaces Fix 3)|
+| Post-synthesis    | `smcity/synthesis_invariants.py`    | Reply text + tool results       | `DATA_DENIAL_INVARIANT`          |
+
+Each engine follows the same shape: `apply_*(inputs, rules=DEFAULT) -> Violation | None`. Each fires at most one corrective LLM re-prompt per turn — no loops, no compounding latency. Adding a new check at any stage is a declarative ~30-line addition; no orchestrator edits needed.
+
+### Failure classes fixed
+
+| Failure class | What was wrong | Fix |
+|---|---|---|
+| POI chain abandonment was a special-case inline check in `orchestrator.py` | Adding more chains required orchestrator surgery; the POI category was re-rolled to the LLM even when the category was inferrable from the user's text | **`smcity/chain_rules.py`** — declarative `ChainRule` engine. The POI rule now lives as one of (eventually many) rules. New: `AutoDispatch(tool, args)` continuation that fires the missing tool deterministically when the category is inferrable from 30 multilingual keyword patterns (EN / yue / zh-Hant / zh-Hans); `LLMHint(text)` continuation preserved as fallback. The orchestrator no longer encodes POI semantics. |
+| LLM led with `meta.ask_user` even when search-shaped queries had obvious tool matches; `ask_user` was a top-3 tool fired on nearly every dataset in the v0.4.16 partial report | Nothing prevented `meta.ask_user` from being the first move; the prompt-level guidance was advisory | **`smcity/tool_call_gates.py`** — pre-execution gate engine with `ASK_USER_ONLY_GATE`. Rejects responses where the only proposed tool is `meta.ask_user`, re-prompts once with the alternative tool families named explicitly (`transport.plan_journey`, `geo.address_lookup`, `geo.find_<category>`). Single retry; if the LLM persists, we accept and surface the clarification — never a loop. |
+| Reply denied non-empty tool data ("I couldn't find any" after 5 dentists were returned) — Failure Pattern #5 from the partial 10k report | No structural check between synthesis output and tool results; prompt-level honesty rules are soft | **`smcity/synthesis_invariants.py`** — post-synthesis invariant engine with `DATA_DENIAL_INVARIANT`. Three guards keep false-positive rate low: (a) reply contains explicit denial language matched by a multilingual regex covering EN, yue, zh-Hant, zh-Hans, ja, ko, fr, de, es, th, vi, id, tl; (b) an `ok`-status tool returned non-empty records; (c) reply mentions zero records (substring check across `name_en` / `name` / `name_tc` / `name_zh` / `route` / `destination_en` / common name fields). Violation triggers one corrective re-prompt with records pre-quoted. |
+| Wrong tool picked from ambiguous menus (`plan_simple_route` vs `plan_journey`; KMB vs Citybus ETAs) | Disambiguation lived in description prose ("do NOT use for Citybus") — easy to miss, inconsistent across tools | **`ToolScope` enum + `domain` field on `ToolSpec`.** Registry auto-prepends `[DEFAULT: <domain>]` / `[SPECIALIZED: <domain>]` / `[FALLBACK]` to every description. 11 transit + meta tools tagged where confusion was documented. The system prompt explains the marker semantics in one paragraph — no per-tool prose edits to re-disambiguate when behavior shifts. |
+
+### Files changed
+
+**New modules:**
+- `smcity/chain_rules.py` — `ChainRule` engine, `AutoDispatch` / `LLMHint` continuations, `POI_CHAIN_RULE` with 30-category multilingual keyword inference.
+- `smcity/synthesis_invariants.py` — `SynthesisInvariant` engine, `DATA_DENIAL_INVARIANT`, multilingual denial regex covering 13 languages, generic record-name extractor that scans any list-of-dicts at top level (no per-tool maintenance).
+- `smcity/tool_call_gates.py` — `ToolCallGate` engine, `ASK_USER_ONLY_GATE`.
+
+**Modified:**
+- `smcity/tools/registry.py` — `ToolScope` enum (`DEFAULT` / `SPECIALIZED` / `FALLBACK`), `scope` + `domain` fields on `ToolSpec`, marker rendering in `openai_schema()`.
+- `smcity/orchestrator.py` — three engines wired into the turn lifecycle; new `_apply_continuation` (returns dispatched results) and `_maybe_retry_for_invariants` helpers; pre-execution gate retry around the first `chat()` call; dead Fix-3 helpers (`_incomplete_poi_chain`, `_coord_hint_from_lookup`, `_POI_QUESTION_RE`) deleted.
+- `smcity/prompts.py` — one-paragraph "Tool selection (scope markers)" section teaching the LLM what `[DEFAULT]` / `[SPECIALIZED]` / `[FALLBACK]` mean.
+- `smcity/tools/transport.py`, `transport_kmb.py`, `transport_citybus.py`, `transport_gmb.py`, `transport_planner.py`, `transport_simple_modes.py`, `otp2.py`, `meta.py` — `scope` + `domain` annotations on 11 transit + meta tools. Notable: `meta.ask_user` is `[FALLBACK]` with rewritten "LAST RESORT" description; `transport.plan_journey` is `[DEFAULT: any_mode_journey]`; `plan_simple_route` is `[SPECIALIZED: mtr_only]`; Citybus/KMB/GMB ETA tools are tagged with operator-specific domains.
+
+**New tests (65 total):**
+- `tests/test_chain_rules.py` (15) — engine semantics + POI rule across EN / yue / zh-Hant / zh-Hans.
+- `tests/test_synthesis_invariants.py` (31) — engine semantics + record-name extraction + one positive case per supported language + neutral-text negative.
+- `tests/test_tool_call_gates.py` (10) — engine semantics + `ASK_USER_ONLY_GATE` paired/unpaired behavior.
+- `tests/test_tool_scope.py` (13) — marker rendering mechanism + smoke tests on the default registry.
+
+**Modified tests:**
+- `tests/test_orchestrator.py` — new `test_ask_user_gate_redirects_llm_to_search_tool` (end-to-end proof that the gate redirects the LLM to a search tool); `test_clarification_gate_via_meta_ask_user` updated to acknowledge the gate retry round-trip.
+
+### Why this is architectural and not a patch
+
+- **Three orthogonal engines, three lifecycle stages.** Pre-execution, post-execution, post-synthesis. Each is independently testable and extensible. The orchestrator is a thin glue layer between them; adding a transport-stop chain rule, a "no taxi mentioned" invariant, or a "forbidden tool combination" gate is a localized declarative addition.
+- **No special cases left in the orchestrator.** The POI chain check that v0.5.0 introduced inline is now one declarative rule among (eventually) many. Fix 3 helpers were deleted, not retained as legacy. The orchestrator file shrank by 60 lines despite gaining three integration points.
+- **Tool selection moved from prose to schema.** `scope` + `domain` are structured fields on every `ToolSpec`; the marker is rendered uniformly across all 55 registered tools. The system prompt explains the markers once; we never have to edit individual tool descriptions to maintain disambiguation as the catalog grows.
+- **Generic mechanisms, not per-example fixes.** `_extract_record_names` scans any list-of-dicts at the top level of any tool result for common name keys — adding a new tool whose results follow the conventions gets coverage automatically. The multilingual denial regex covers all 13 supported languages from the start (per the all-languages-from-v0 invariant) rather than catching English first and expanding later.
+- **336 tests pass (271 → 336).** Five test files added; one updated. Ruff (lint + format) clean, mypy strict clean on the new modules.
+
 ## [0.5.0] — 2026-05-21
 
 **Coverage architecture overhaul** — four composing fixes that target the structural failure modes the partial 10k report exposed. The v0.4.17 release was prompt-engineering patches; this one removes the *shapes* that allowed those bugs.

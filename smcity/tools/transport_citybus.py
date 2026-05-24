@@ -15,7 +15,7 @@ from datetime import datetime
 import httpx
 from pydantic import BaseModel, Field
 
-from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
+from smcity.tools.registry import ToolContext, ToolScope, ToolSpec, ToolUpstreamError
 
 CITYBUS_BASE = "https://rt.data.gov.hk/v2/transport/citybus"
 
@@ -91,10 +91,11 @@ async def _eta_handler(args: CitybusEtaArgs, ctx: ToolContext) -> CitybusEtaResu
 CITYBUS_ETA_TOOL: ToolSpec[CitybusEtaArgs, CitybusEtaResult] = ToolSpec(
     name="transport.get_citybus_eta_by_route_stop",
     description_en=(
-        "ETA for a Citybus route at a given 6-digit stop_id. Use when the user "
-        "names a Citybus route and a known stop. If the user only has a name, call "
-        "geo.address_lookup first and then transport.get_citybus_route_stops to "
-        "find the nearest stop_id."
+        "ETA for a Citybus (城巴 CTB) route at a given 6-digit stop_id. Use ONLY "
+        "when the user names a Citybus route — do NOT use for KMB / LWB routes "
+        "(those have transport.get_kmb_eta_by_route_stop). If the user only has "
+        "a name, call geo.address_lookup first and then "
+        "transport.get_citybus_route_stops to find the nearest stop_id."
     ),
     args_schema=CitybusEtaArgs,
     result_schema=CitybusEtaResult,
@@ -103,6 +104,8 @@ CITYBUS_ETA_TOOL: ToolSpec[CitybusEtaArgs, CitybusEtaResult] = ToolSpec(
     budget_ms=2000,
     upstream_langs=frozenset({"en", "zh-Hant", "zh-Hans"}),
     upstream="rt.data.gov.hk/citybus",
+    scope=ToolScope.SPECIALIZED,
+    domain="citybus_only",
 )
 
 
@@ -162,4 +165,6 @@ CITYBUS_ROUTE_STOPS_TOOL: ToolSpec[CitybusRouteStopsArgs, CitybusRouteStopsResul
     budget_ms=2000,
     upstream_langs=frozenset({"en", "zh-Hant", "zh-Hans"}),
     upstream="rt.data.gov.hk/citybus",
+    scope=ToolScope.SPECIALIZED,
+    domain="citybus_only",
 )

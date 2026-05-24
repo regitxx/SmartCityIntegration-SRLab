@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from smcity.langrouter.coverage import DATASET_COVERAGE
 from smcity.session import SessionStore
-from smcity.tools.registry import ToolContext, ToolSpec
+from smcity.tools.registry import ToolContext, ToolScope, ToolSpec
 
 # --- ask_user --------------------------------------------------------------
 
@@ -48,10 +48,12 @@ async def _ask_user(args: AskUserArgs, ctx: ToolContext) -> AskUserResult:
 ASK_USER_TOOL: ToolSpec[AskUserArgs, AskUserResult] = ToolSpec(
     name="meta.ask_user",
     description_en=(
-        "Ask the user a short clarifying question before running other tools. "
-        "Use this when any of origin / destination / transport mode / venue type "
-        "is missing or ambiguous. Prefer one question at a time; do not ask the "
-        "same thing again if the user already answered."
+        "LAST RESORT. Ask the user a short clarifying question. Before calling "
+        "this, try the most likely search/lookup tool with the user's text as-is "
+        "— search tools return empty results or candidate lists, both of which "
+        "are more useful than asking. Only valid after one failed/empty tool "
+        "attempt this turn. Prefer one question at a time; do not ask the same "
+        "thing again if the user already answered."
     ),
     args_schema=AskUserArgs,
     result_schema=AskUserResult,
@@ -60,6 +62,7 @@ ASK_USER_TOOL: ToolSpec[AskUserArgs, AskUserResult] = ToolSpec(
     budget_ms=50,
     cacheable=False,
     upstream="(none)",
+    scope=ToolScope.FALLBACK,
 )
 
 
@@ -99,6 +102,8 @@ WHAT_LANGUAGES_TOOL: ToolSpec[WhatLanguagesArgs, WhatLanguagesResult] = ToolSpec
     ttl_seconds=24 * 60 * 60,
     budget_ms=50,
     upstream="(internal)",
+    scope=ToolScope.SPECIALIZED,
+    domain="meta_query",
 )
 
 
@@ -137,4 +142,6 @@ FORGET_ME_TOOL: ToolSpec[ForgetMeArgs, ForgetMeResult] = ToolSpec(
     budget_ms=200,
     cacheable=False,
     upstream="(internal)",
+    scope=ToolScope.SPECIALIZED,
+    domain="session_reset",
 )

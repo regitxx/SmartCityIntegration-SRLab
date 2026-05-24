@@ -24,6 +24,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from smcity.cantonese_polish import polish as polish_cantonese
+from smcity.chain_rules import (
+    AutoDispatch,
+    ChainContinuation,
+    apply_chain_rules,
+)
 from smcity.classifier import classify
 from smcity.langrouter import DATASET_COVERAGE, LangDetection, choose_query_lang, detect
 from smcity.llm import LLMError, chat, chat_stream
@@ -44,6 +49,8 @@ from smcity.schemas import (
 )
 from smcity.session import SessionStore, redact_pii
 from smcity.slots import Locale, SessionSlots
+from smcity.synthesis_invariants import apply_invariants
+from smcity.tool_call_gates import apply_gates
 from smcity.tools import ToolRegistry, build_default_registry
 from smcity.tools.registry import ToolContext, ToolResult
 
@@ -191,6 +198,14 @@ class Orchestrator:
             )
             reply_text = await self._stream_final(messages, req.session_id, _emit)
             reply_text = _normalise_whitespace(reply_text)
+            reply_text = await self._maybe_retry_for_invariants(
+                reply_text,
+                messages,
+                tool_results,
+                detection,
+                req.session_id,
+                _emit,
+            )
             reply_text = _maybe_polish(reply_text, detection)
             reply_text = _rewrite_source_footer(reply_text, citations)
 
@@ -238,6 +253,54 @@ class Orchestrator:
             _emit(TurnEvent(type="turn.final", data=response.model_dump(mode="json")))
             return response
 
+        # --- Pre-execution gates ----------------------------------------
+        # Declarative checks in smcity/tool_call_gates.py reject obviously
+        # bad tool-call proposals (e.g., leading with meta.ask_user when no
+        # search has been tried). On a violation, re-prompt the LLM once
+        # with the corrective hint and use the retry's tool calls. If the
+        # retry persists with the bad shape, we accept it — single retry,
+        # no loops.
+        if first.tool_calls:
+            gate_violation = apply_gates(first.tool_calls)
+            if gate_violation is not None:
+                _emit(
+                    TurnEvent(
+                        type="gate.violated",
+                        data={"name": gate_violation.name, "kind": gate_violation.kind},
+                    )
+                )
+                retry_messages = [
+                    *messages,
+                    {
+                        "role": "assistant",
+                        "content": first.text or "",
+                        "tool_calls": [
+                            {
+                                "id": tc["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tc["name"],
+                                    "arguments": tc["arguments"],
+                                },
+                            }
+                            for tc in first.tool_calls
+                        ],
+                    },
+                    {"role": "system", "content": gate_violation.corrective_prompt},
+                ]
+                try:
+                    retry = await chat(
+                        retry_messages,
+                        tools=self._registry.openai_schemas(),
+                        parallel_tool_calls=True,
+                        session_id=req.session_id,
+                        known_tool_names=set(self._registry.names()),
+                    )
+                except LLMError:
+                    retry = None
+                if retry is not None and retry.tool_calls:
+                    first = retry
+
         if first.tool_calls:
             tool_results = await self._run_parallel(first.tool_calls, slots, detection, _emit)
 
@@ -273,81 +336,38 @@ class Orchestrator:
                     }
                 )
 
-            # --- POI chain-completion enforcement ----------------------------
-            # If geo.address_lookup ran successfully but no geo.find_* did,
-            # and the user's question is POI-shaped, give the LLM one more
-            # tool-call turn with the lat/lng pre-quoted. This catches the
-            # "agent returns coordinates and stops" failure mode the prompt
-            # tries to prevent — but as a structural post-condition, not a
-            # plea. See smcity_fuzz.contracts._poi_chain_contract.
-            if _incomplete_poi_chain(safe_text, tool_results):
-                coord_hint = _coord_hint_from_lookup(tool_results)
-                if coord_hint:
-                    messages.append(
-                        {
-                            "role": "system",
-                            "content": (
-                                f"You called geo.address_lookup and got "
-                                f"{coord_hint}, but you did NOT call a "
-                                "geo.find_* POI tool. The user asked a POI / "
-                                "'where is the nearest …' question. Call the "
-                                "matching geo.find_<category> tool NOW with "
-                                "those coordinates. Do not synthesise a reply "
-                                "yet."
-                            ),
-                        }
-                    )
-                    try:
-                        retry = await chat(
-                            messages,
-                            tools=self._registry.openai_schemas(),
-                            parallel_tool_calls=True,
-                            session_id=req.session_id,
-                            known_tool_names=set(self._registry.names()),
-                        )
-                    except LLMError:
-                        retry = None
-                    if retry and retry.tool_calls:
-                        retry_results = await self._run_parallel(
-                            retry.tool_calls, slots, detection, _emit
-                        )
-                        self._append_trace_and_citations(
-                            retry_results, tool_trace, citations, detection
-                        )
-                        messages.append(
-                            {
-                                "role": "assistant",
-                                "content": retry.text or "",
-                                "tool_calls": [
-                                    {
-                                        "id": tc["id"],
-                                        "type": "function",
-                                        "function": {
-                                            "name": tc["name"],
-                                            "arguments": tc["arguments"],
-                                        },
-                                    }
-                                    for tc in retry.tool_calls
-                                ],
-                            }
-                        )
-                        for res in retry_results:
-                            messages.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": _id_for(
-                                        retry.tool_calls, res.name, res.args
-                                    ),
-                                    "content": json.dumps(
-                                        {
-                                            "status": res.status,
-                                            "result": res.result,
-                                            "error": res.error,
-                                        },
-                                        ensure_ascii=False,
-                                    ),
-                                }
-                            )
+            # --- Chain-completion enforcement -------------------------------
+            # Declarative rules in smcity/chain_rules.py decide whether the
+            # tool chain is incomplete and how to finish it. Two outcomes:
+            #
+            # AutoDispatch — orchestrator fires the successor tool directly
+            #   (deterministic, no LLM re-roll). Used when the missing tool +
+            #   args can be inferred unambiguously from the user's text and
+            #   the precondition result. Currently: POI category inference.
+            #
+            # LLMHint — orchestrator appends a system message and re-prompts
+            #   the LLM to pick the successor. Used when inference is too
+            #   ambiguous. This is the old Fix 3 path, preserved as fallback.
+            # Track the union of all dispatched tool results — first round
+            # plus anything the chain-rules engine adds — so the synthesis
+            # invariant check sees the full picture.
+            all_tool_results: list[ToolResult] = list(tool_results)
+
+            chain_match = apply_chain_rules(safe_text, tool_results)
+            if chain_match is not None:
+                rule, continuation = chain_match
+                followup_results = await self._apply_continuation(
+                    rule.name,
+                    continuation,
+                    messages,
+                    tool_trace,
+                    citations,
+                    slots,
+                    detection,
+                    req.session_id,
+                    _emit,
+                )
+                all_tool_results.extend(followup_results)
 
             # Post-tool reminder — prevents the "Chinese in tool output pulled the
             # reply into Cantonese/Mandarin" register bug.
@@ -355,6 +375,17 @@ class Orchestrator:
 
             reply_text = await self._stream_final(messages, req.session_id, _emit)
             reply_text = _normalise_whitespace(reply_text)
+            # Synthesis invariant check — catches "tool returned data, reply
+            # denies it" before we ever ship the bad text. See
+            # smcity/synthesis_invariants.py.
+            reply_text = await self._maybe_retry_for_invariants(
+                reply_text,
+                messages,
+                all_tool_results,
+                detection,
+                req.session_id,
+                _emit,
+            )
             reply_text = _maybe_polish(reply_text, detection)
         else:
             reply_text = first.text or "(empty reply)"
@@ -522,6 +553,173 @@ class Orchestrator:
         )
         return result
 
+    async def _apply_continuation(
+        self,
+        rule_name: str,
+        continuation: ChainContinuation,
+        messages: list[dict[str, Any]],
+        tool_trace: list[ToolTraceEntry],
+        citations: list[Citation],
+        slots: SessionSlots,
+        detection: LangDetection,
+        session_id: str,
+        emit: EventEmitter,
+    ) -> list[ToolResult]:
+        """Apply a ChainContinuation produced by smcity/chain_rules.py.
+
+        AutoDispatch — dispatch the named tool ourselves and append a
+        synthetic assistant+tool message pair so the synthesis LLM sees the
+        successor result alongside the original tool calls.
+
+        LLMHint — append the hint text as a system message, re-prompt the
+        LLM, and execute whatever tool calls it returns (the old Fix 3 path).
+
+        Returns the ToolResults that were actually dispatched (so the caller
+        can include them in the post-synthesis invariant check). Empty when
+        the LLM-hint retry returned no tool calls.
+        """
+        emit(
+            TurnEvent(
+                type="chain.fired",
+                data={
+                    "rule": rule_name,
+                    "kind": "auto_dispatch"
+                    if isinstance(continuation, AutoDispatch)
+                    else "llm_hint",
+                },
+            )
+        )
+
+        if isinstance(continuation, AutoDispatch):
+            followup = await self._dispatch_one(
+                continuation.tool, continuation.args, slots, detection, emit
+            )
+            self._append_trace_and_citations([followup], tool_trace, citations, detection)
+            synthetic_id = f"chain-{rule_name}-{continuation.tool}"
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": synthetic_id,
+                            "type": "function",
+                            "function": {
+                                "name": continuation.tool,
+                                "arguments": json.dumps(continuation.args, ensure_ascii=False),
+                            },
+                        }
+                    ],
+                }
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": synthetic_id,
+                    "content": json.dumps(
+                        {
+                            "status": followup.status,
+                            "result": followup.result,
+                            "error": followup.error,
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            )
+            return [followup]
+
+        # LLMHint — re-prompt the LLM with the hint appended.
+        messages.append({"role": "system", "content": continuation.text})
+        try:
+            retry = await chat(
+                messages,
+                tools=self._registry.openai_schemas(),
+                parallel_tool_calls=True,
+                session_id=session_id,
+                known_tool_names=set(self._registry.names()),
+            )
+        except LLMError:
+            return []
+        if not retry.tool_calls:
+            return []
+        retry_results = await self._run_parallel(retry.tool_calls, slots, detection, emit)
+        self._append_trace_and_citations(retry_results, tool_trace, citations, detection)
+        messages.append(
+            {
+                "role": "assistant",
+                "content": retry.text or "",
+                "tool_calls": [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                    for tc in retry.tool_calls
+                ],
+            }
+        )
+        for res in retry_results:
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": _id_for(retry.tool_calls, res.name, res.args),
+                    "content": json.dumps(
+                        {"status": res.status, "result": res.result, "error": res.error},
+                        ensure_ascii=False,
+                    ),
+                }
+            )
+        return retry_results
+
+    async def _maybe_retry_for_invariants(
+        self,
+        reply_text: str,
+        messages: list[dict[str, Any]],
+        tool_results: list[ToolResult],
+        detection: LangDetection,
+        session_id: str,
+        emit: EventEmitter,
+    ) -> str:
+        """Run synthesis invariants over `reply_text`. If a violation fires,
+        append the corrective system message and re-prompt the LLM once
+        (non-streaming). Return the retry text on success, the original on
+        any failure — we never make the reply worse by trying to fix it.
+
+        Sibling to the chain-rules engine: chain_rules guards the tool-call
+        stage; this guards the synthesis stage. Both are structural.
+        """
+        violation = apply_invariants(reply_text, tool_results, detection)
+        if violation is None:
+            return reply_text
+
+        emit(
+            TurnEvent(
+                type="invariant.violated",
+                data={
+                    "name": violation.name,
+                    "kind": violation.kind,
+                    "tool": violation.tool_name,
+                    "records": violation.record_count,
+                },
+            )
+        )
+
+        retry_messages = [
+            *messages,
+            {"role": "assistant", "content": reply_text},
+            {"role": "system", "content": violation.corrective_prompt},
+        ]
+        try:
+            retry = await chat(
+                retry_messages,
+                session_id=session_id,
+                known_tool_names=set(self._registry.names()),
+            )
+        except LLMError:
+            return reply_text
+        retry_text = (retry.text or "").strip()
+        return retry_text or reply_text
+
     def _append_trace_and_citations(
         self,
         tool_results: list[ToolResult],
@@ -591,13 +789,15 @@ class Orchestrator:
 # every browser but break naive substring search (`"Mong Kok" in reply`
 # fails) and copy-paste workflows. Normalised to a regular ASCII space in
 # the final reply.
-_UNICODE_SPACE_NORMALISE = str.maketrans({
-    "\u00a0": " ",  # NO-BREAK SPACE
-    "\u202f": " ",  # NARROW NO-BREAK SPACE
-    "\u2007": " ",  # FIGURE SPACE
-    "\u2009": " ",  # THIN SPACE
-    "\u200a": " ",  # HAIR SPACE
-})
+_UNICODE_SPACE_NORMALISE = str.maketrans(
+    {
+        "\u00a0": " ",  # NO-BREAK SPACE
+        "\u202f": " ",  # NARROW NO-BREAK SPACE
+        "\u2007": " ",  # FIGURE SPACE
+        "\u2009": " ",  # THIN SPACE
+        "\u200a": " ",  # HAIR SPACE
+    }
+)
 
 
 def _normalise_whitespace(text: str) -> str:
@@ -638,57 +838,6 @@ def _rewrite_source_footer(text: str, citations: list[Citation]) -> str:
 def _localise_chitchat(canned: str, d: LangDetection) -> str:
     # Chitchat table returns a reply-per-language already; no extra logic needed.
     return canned
-
-
-# Matches the rough shape of a POI / nearest-X question in EN + Cantonese +
-# Mandarin. False positives are cheap (one extra LLM round-trip); false
-# negatives leave the chain-completion check unfired so they cost more.
-# Keep this generous.
-_POI_QUESTION_RE = re.compile(
-    r"""
-    nearest | closest | near\s+me | nearby | around | find\s+a | find\s+the
-    | where\s+is | where\s+can\s+i\s+find | how\s+do\s+i\s+find
-    | dentist | toilet | convenience | supermarket | pharmacy | bench
-    | shelter | kiosk | drinking\s+water | recycling | optician | barber
-    | hairdresser | clothes\s+shop | bookstore | laundry | greengrocer
-    | place\s+of\s+worship | temple | church | mosque | mtr\s+entrance
-    | elevator | lift | handrail | marketplace | wet\s+market
-    | 最近 | 附近 | 邊度有 | 邊度可以 | 揾.*喺邊 | 搵.*喺邊
-    | 點樣搵 | 邊間 | 有冇.*喺
-    | 哪里 | 哪裏 | 附近 | 最近的 | 在哪
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
-
-
-def _incomplete_poi_chain(user_text: str, tool_results: list[ToolResult]) -> bool:
-    """True when the agent called geo.address_lookup but never the matching
-    POI tool, on a question that looks POI-shaped."""
-    ok_names = {r.name for r in tool_results if r.status == "ok"}
-    if "geo.address_lookup" not in ok_names:
-        return False
-    if any(name.startswith("geo.find_") for name in ok_names):
-        return False
-    return bool(_POI_QUESTION_RE.search(user_text or ""))
-
-
-def _coord_hint_from_lookup(tool_results: list[ToolResult]) -> str | None:
-    """Pull the first lat/lng pair out of a successful geo.address_lookup
-    result. Used to remind the LLM in the chain-completion retry."""
-    for r in tool_results:
-        if r.name != "geo.address_lookup" or r.status != "ok" or not r.result:
-            continue
-        candidates = r.result.get("candidates") or []
-        if not candidates:
-            continue
-        first = candidates[0]
-        lat = first.get("lat")
-        lng = first.get("lng") or first.get("lon")
-        name = first.get("name_en") or first.get("name") or "the resolved point"
-        if lat is None or lng is None:
-            continue
-        return f"lat={lat}, lng={lng} ({name})"
-    return None
 
 
 def _detection_from_override(code: str, carried: LangDetection) -> LangDetection:

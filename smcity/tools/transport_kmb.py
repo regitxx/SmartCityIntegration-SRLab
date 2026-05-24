@@ -20,7 +20,7 @@ import httpx
 from pydantic import BaseModel, Field
 from rapidfuzz import fuzz, process
 
-from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
+from smcity.tools.registry import ToolContext, ToolScope, ToolSpec, ToolUpstreamError
 
 KMB_BASE = "https://data.etabus.gov.hk/v1/transport/kmb"
 
@@ -223,7 +223,8 @@ KMB_ETA_BY_STOP_TOOL: ToolSpec[KMBEtaByStopArgs, KMBEtaByStopResult] = ToolSpec(
         "a 16-char KMB stop_id or a free-text stop name in EN / 繁體 / 简体 (fuzzy-"
         "matched against the live KMB stop catalog). Returns next ~10 buses sorted "
         "by ETA. Use whenever the user asks about KMB / LWB buses from a specific "
-        "stop, bus terminus, or street."
+        "stop, bus terminus, or street. Do NOT use for Citybus, GMB minibus, or "
+        "MTR — those have their own operator-specific tools."
     ),
     args_schema=KMBEtaByStopArgs,
     result_schema=KMBEtaByStopResult,
@@ -232,6 +233,8 @@ KMB_ETA_BY_STOP_TOOL: ToolSpec[KMBEtaByStopArgs, KMBEtaByStopResult] = ToolSpec(
     budget_ms=2000,
     upstream_langs=frozenset({"en", "zh-Hant", "zh-Hans"}),
     upstream="data.etabus.gov.hk/kmb",
+    scope=ToolScope.SPECIALIZED,
+    domain="kmb_lwb_bus_only",
 )
 
 
@@ -310,7 +313,8 @@ KMB_ETA_BY_ROUTE_STOP_TOOL: ToolSpec[KMBEtaByRouteStopArgs, KMBRouteEtaResult] =
     description_en=(
         "ETA for a single KMB / LWB route at a single stop. Input: route number "
         "(e.g. '1A'), stop identifier (id or fuzzy name). Use when the user names "
-        "a specific bus route."
+        "a specific bus route. Do NOT use for Citybus routes — they have their "
+        "own tool (transport.get_citybus_eta_by_route_stop)."
     ),
     args_schema=KMBEtaByRouteStopArgs,
     result_schema=KMBRouteEtaResult,
@@ -319,4 +323,6 @@ KMB_ETA_BY_ROUTE_STOP_TOOL: ToolSpec[KMBEtaByRouteStopArgs, KMBRouteEtaResult] =
     budget_ms=2000,
     upstream_langs=frozenset({"en", "zh-Hant", "zh-Hans"}),
     upstream="data.etabus.gov.hk/kmb",
+    scope=ToolScope.SPECIALIZED,
+    domain="kmb_lwb_bus_only",
 )

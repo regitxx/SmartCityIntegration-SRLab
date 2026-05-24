@@ -17,7 +17,7 @@ import httpx
 from pydantic import BaseModel, Field
 from rapidfuzz import fuzz, process
 
-from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
+from smcity.tools.registry import ToolContext, ToolScope, ToolSpec, ToolUpstreamError
 
 _DATA_ROOT = Path(__file__).resolve().parent.parent.parent / "data"
 MTR_NEXT_TRAIN_URL = "https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php"
@@ -66,9 +66,7 @@ def resolve_mtr_station(name: str) -> MTRStation | None:
             return station
 
     names_only = [c[0] for c in candidates]
-    match = process.extractOne(
-        name, names_only, scorer=fuzz.token_sort_ratio, score_cutoff=85
-    )
+    match = process.extractOne(name, names_only, scorer=fuzz.token_sort_ratio, score_cutoff=85)
     if match is None:
         return None
     return candidates[match[2]][1]
@@ -166,4 +164,6 @@ MTR_NEXT_TRAINS_TOOL: ToolSpec[MTRNextTrainsArgs, MTRNextTrainsResult] = ToolSpe
     budget_ms=1500,
     upstream_langs=frozenset({"en", "zh-Hant"}),
     upstream="rt.data.gov.hk/mtr",
+    scope=ToolScope.SPECIALIZED,
+    domain="mtr_eta",
 )

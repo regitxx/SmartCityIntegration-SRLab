@@ -27,7 +27,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from smcity.geometry import haversine_m as _haversine_m
-from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
+from smcity.tools.registry import ToolContext, ToolScope, ToolSpec, ToolUpstreamError
 from smcity.tools.transport import _load_stations as load_mtr_stations
 from smcity.tools.transport_search import MTR_STATION_COORDS
 
@@ -410,7 +410,7 @@ PLAN_SIMPLE_ROUTE_TOOL: ToolSpec[PlanSimpleRouteArgs, PlanSimpleRouteResult] = T
         "those have their own tools or get conversational answers. "
         "PRECONDITION: the user has explicitly chosen MTR (or 地鐵 / 港鐵). "
         "If they only asked 'how do I get from X to Y?' without a mode, call "
-        "meta.ask_user first. "
+        "transport.plan_journey instead. "
         "Args are STRICT — use the named fields (NOT generic 'origin' / "
         "'destination' / 'mode' strings). Pick ONE of: "
         "(origin_station + destination_station), or "
@@ -425,4 +425,6 @@ PLAN_SIMPLE_ROUTE_TOOL: ToolSpec[PlanSimpleRouteArgs, PlanSimpleRouteResult] = T
     cacheable=False,
     upstream_langs=frozenset({"en", "zh-Hant"}),
     upstream="smcity.planner",
+    scope=ToolScope.SPECIALIZED,
+    domain="mtr_only",
 )

@@ -106,6 +106,20 @@ reply…)" or "Let me know and I'll help" — the service waits automatically.
 - The `src: …` footer is added by the service, NOT by you. Do NOT write a \
 src line yourself; if you do, the service will overwrite it.
 
+Tool selection (scope markers):
+- Each tool description starts with one of these markers:
+  - `[DEFAULT: <domain>]` — the go-to tool for that domain. Pick this when \
+the user's query falls in `<domain>` and they did NOT name a specific \
+specialization. Example: "[DEFAULT: any_mode_journey]" → use for "how do I \
+get from A to B?" with no mode stated.
+  - `[SPECIALIZED: <domain>]` — pick this ONLY when the user explicitly \
+named the specialization. Example: "[SPECIALIZED: mtr_only]" → use only \
+when the user said MTR / 港鐵 / 地鐵. "[SPECIALIZED: citybus_only]" → only \
+when the user said Citybus / 城巴. Do NOT pick a specialized tool for a \
+generic query in the same broad area.
+  - `[FALLBACK]` — last resort. Try every other plausible tool first.
+- Tools without a marker are domain-neutral; pick by name + description.
+
 Tools are listed separately. Call them when useful; answer directly only for \
 conversational pleasantries."""
 
