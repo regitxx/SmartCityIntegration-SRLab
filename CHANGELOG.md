@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.5.2] — 2026-05-24
+
+**POI tool description trim** — patch release that addresses the prose half of the v0.5.0 prompt-bloat regression. The structural enforcement engines from v0.5.1 only fire if the LLM returns tool calls in the first place; on gpt-oss-120b the ~13K-token tool catalog was producing 400-rejections and prompt-processing timeouts on transport datasets. This trims the 30 POI tool descriptions from ~45 words to ~13 words each.
+
+### Measured impact
+
+| Metric | Before | After |
+|---|---|---|
+| POI description avg (words) | ~45 | 15.5 |
+| POI description total (tokens) | ~1850 | ~835 |
+| Net prompt savings | — | ~1.0K tokens / turn |
+
+The label (from `_LABELS`) carries the discriminative info — "convenience stores (7-Eleven, Circle K, VanGO, etc.)" already tells the LLM what this tool is for. Result-shape detail (coords, names, tags) lives in the result schema, which is serialized into the prompt anyway. Chain enforcement (the "call `geo.address_lookup` first" half of the old prose) is now structural via `smcity/chain_rules.py` — the prompt doesn't need to teach it.
+
+### What this does NOT fix
+
+The bigger chunk of POI prompt cost is the duplicated `FindPoiArgs` schema serialization across all 30 tools (~9.5K tokens of repeated boilerplate — 8 fields × descriptions × 30 tools). That's an architectural fix (two-stage tool routing, where the LLM only sees a relevant subset of tools per turn) reserved for v0.6.0. v0.5.2 is the prose half only — a focused patch.
+
+### Files changed
+
+- `smcity/tools/osm_pois.py` — `_make_poi_tool()` factory: description trimmed from a 5-line block to a 2-line one. Comment added explaining the rationale (the label carries discrimination, the schema carries result shape, the chain engine carries follow-up enforcement). Stale `# noqa: RUF002` directive replaced with `RUF003` covering the workbook-range comments (`S514–S530`) that ruff began flagging after the file edits.
+
+### Why this is a patch and not a feature
+
+- No new code surface; no new tests required. The mechanism for POI tool selection didn't change; only the prose density did.
+- The trim was the originally-planned v0.5.1 starter step (drafted in conversation, deferred when scope expanded to the three-engine lifecycle). v0.5.2 closes the deferral cleanly.
+- 336 tests still green. Ruff (lint + format) clean. Mypy strict clean. No behavior change in unit tests; the win is downstream of the LLM's prompt-processing budget on gpt-oss-120b.
+
 ## [0.5.1] — 2026-05-24
 
 **Orchestrator lifecycle guard rails + tool scope tags** — promotes the v0.5.0 inline POI chain check (Fix 3) into a declarative engine, adds two sibling engines at the other LLM-turn lifecycle stages, and replaces ad-hoc tool-selection disambiguation prose with a structured `scope`/`domain` schema on every `ToolSpec`. The orchestrator now enforces three independent structural invariants per turn instead of relying on prompt nudges.

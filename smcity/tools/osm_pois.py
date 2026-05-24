@@ -1,4 +1,4 @@
-# ruff: noqa: RUF002  # en-dash in docstring prose is intentional.
+# ruff: noqa: RUF003  # en-dashes in workbook range comments (S514–S530) are intentional.
 """OpenStreetMap POI search via Overpass API — one thin tool per category.
 
 The old `geo.search_osm_pois` mega-tool packed 30 POI kinds behind a single
@@ -278,15 +278,19 @@ def _make_handler(category: str) -> Callable[[FindPoiArgs, ToolContext], Awaitab
 
 
 def _make_poi_tool(slug: str) -> ToolSpec[FindPoiArgs, FindPoiResult]:
+    # Description is intentionally terse. The previous form averaged ~45
+    # words per tool * 30 tools = ~1.3K tokens of duplicated prose in every
+    # prompt. With gpt-oss-120b that prompt-processing tax was breaking
+    # tool-calling on transport datasets (v0.5.0 regression). The label
+    # (from `_LABELS`) carries the discriminative info; result-shape detail
+    # is already in the schema; chain enforcement is in `smcity/chain_rules.py`
+    # rather than this prose.
     label = _LABELS[slug]
     return ToolSpec(
         name=f"geo.find_{slug}",
         description_en=(
-            f"Find {label} near a point in Hong Kong. Returns up to "
-            "max_results POIs with coords, names, and tags (brand, "
-            "opening_hours, wheelchair access when tagged). Call "
-            "`geo.address_lookup` first if you only have a place name, "
-            "then pass that lat/lng here."
+            f"Find {label} near a lat/lng (Hong Kong). "
+            "Pair with `geo.address_lookup` for landmark queries."
         ),
         args_schema=FindPoiArgs,
         result_schema=FindPoiResult,
@@ -313,10 +317,10 @@ POI_TOOL_NAMES: frozenset[str] = frozenset(POI_TOOL_NAME.values())
 
 
 __all__ = [
-    "FindPoiArgs",
-    "FindPoiResult",
     "OSM_POI_TOOLS",
-    "OsmPoi",
     "POI_TOOL_NAME",
     "POI_TOOL_NAMES",
+    "FindPoiArgs",
+    "FindPoiResult",
+    "OsmPoi",
 ]
