@@ -4,11 +4,13 @@ Agentic chat system that answers Hong Kong smart-city questions — transport (M
 
 Cantonese-first (廣東話), 100 % language coverage from v0 via a translation-fallback layer. Clean seams for robot / voice integration (WebSocket streaming + stable `/turn` REST).
 
-## Status — **v0.4.5** · 2026-04-23
+## Status — **v0.5.3** · 2026-05-24
 
-- **27 live tools** (was 18 at v0.1). Every data-producing tool hits a real upstream; the 3 formerly-bundled tools (LCSD courts, LCSD pools, HKHA estates) all migrated to live feeds in v0.3.4 / v0.4.2.
-- **232 unit tests + 7 integration tests green**, ruff + format + mypy strict clean across 76 source files.
-- **Adversarial LLM fuzz harness** (`smcity_fuzz/`, v0.4.0+) — synthetic-user agent drives the real agent, LLM-as-judge grades semantic accuracy; exports paste-ready Markdown reports for handoff to Claude / Gemini.
+- **55 live tools.** Every data-producing tool hits a real upstream; the 3 formerly-bundled tools (LCSD courts, LCSD pools, HKHA estates) all migrated to live feeds in v0.3.4 / v0.4.2; v0.5.0 split the POI mega-tool into 30 per-category thin tools (`geo.find_dentist`, `geo.find_bench`, …).
+- **338 unit tests green** (4 new orchestrator integration tests + 65 unit tests across the v0.5.x engines). Ruff + format + mypy strict clean across all 39 source files.
+- **Three-stage orchestrator guard rails (v0.5.1)** — declarative engines run at each LLM-turn lifecycle stage: `tool_call_gates` (pre-execution) reject ill-shaped tool-call proposals; `chain_rules` (post-execution) auto-complete known tool chains deterministically; `synthesis_invariants` (post-synthesis) reject replies that deny non-empty tool data across 13 supported languages. See [docs/architecture/ARCHITECTURE.md §3.7](docs/architecture/ARCHITECTURE.md).
+- **Tool scope tags (v0.5.1)** — `ToolScope` enum + `domain` field on every `ToolSpec` auto-prepend `[DEFAULT: …]` / `[SPECIALIZED: …]` / `[FALLBACK]` markers into descriptions. 11 transit + meta tools tagged where confusion was documented.
+- **Adversarial LLM fuzz harness** (`smcity_fuzz/`, v0.4.0+; v0.5.0 contracts-based judge) — synthetic-user agent drives the real agent, contract functions in `smcity_fuzz/contracts.py` grade outcomes; exports paste-ready Markdown reports for Claude / Gemini handoff.
 - **OpenTripPlanner 2 sidecar** (`otp/`, v0.4.4) — true multimodal (walk + bus + MTR + minibus + ferry) routing. Tool wired; activation requires Docker + HK GTFS graph build (see `otp/README.md`).
 
 LLM backbone: `openai/gpt-oss-120b` served by LM Studio on the lab's Mac Studio (`earnests-mac-studio.taila366aa.ts.net:1234`) over Tailscale. OpenAI-compatible; native tool-calling + streaming verified. For the fuzzer, pair with `openai/gpt-oss-20b` loaded alongside in the same LM Studio instance.
@@ -25,7 +27,7 @@ Prereqs:
 cp .env.example .env                      # adjust if needed
 uv sync --extra dev                       # or: just install
 uv run python -m scripts.llm_ping         # smoke-test LM Studio
-uv run pytest -q -m "not integration"     # 232 unit tests
+uv run pytest -q -m "not integration"     # 338 unit tests
 uv run uvicorn smcity.app:app --host 0.0.0.0 --port 8080
 # open http://localhost:8080
 ```
@@ -114,25 +116,30 @@ Full walkthrough in [otp/README.md](otp/README.md). The hand-rolled Dijkstra MTR
 ## Layout
 
 ```
-smcity/                       27-tool agent
+smcity/                       55-tool agent
 ├── app.py                    FastAPI — /health, /turn, /ws/:session_id
 ├── orchestrator.py           per-turn pipeline: detect → classify → tools → stream
+├── tool_call_gates.py        v0.5.1 — pre-execution gate engine (ASK_USER_ONLY_GATE)
+├── chain_rules.py            v0.5.1 — post-execution chain engine (POI_CHAIN_RULE)
+├── synthesis_invariants.py   v0.5.1 — post-synthesis invariant engine (DATA_DENIAL)
 ├── prompts.py                system prompt + Cantonese few-shot exemplars
 ├── cantonese_polish.py       formal→colloquial post-pass (60+ subs, 7 regex rules)
 ├── classifier.py             deterministic fast-path (weather/aqi/warnings/chitchat)
 ├── ratelimit.py              per-session token bucket (v0.3.1)
 ├── langrouter/               language detection + coverage matrix
 ├── tools/                    13 transport + 4 context + 2 facility + 2 housing
-│                             + 2 geo + 1 csdi + 3 meta = 27 tools
+│                             + 32 geo (incl. 30 OSM POI per-category tools) +
+│                             1 csdi + 3 meta = 55 tools.
+│                             ToolSpec carries scope/domain (v0.5.1) for the
+│                             [DEFAULT: …] / [SPECIALIZED: …] / [FALLBACK] markers.
 └── …                          see docs/architecture/TOOL_CATALOG.md for details
 
-smcity_fuzz/                  adversarial fuzz harness (v0.4.0+)
-├── synth.py                  LLM question generator (5 personas × 22 topics × 4 langs)
-├── judge.py                  LLM rubric scorer — DIAGNOSTIC ONLY, no code fixes
-├── runner.py                 asyncio matrix runner (http OR ws mode, TTFT capture)
-├── store.py                  JSONL append log
-├── export.py                 Markdown report for Claude / Gemini handoff
-└── cli.py                    `python -m smcity_fuzz run|report|failures|export`
+smcity_fuzz/                  adversarial fuzz harness (v0.4.0+; v0.5.0 contracts)
+├── contracts.py              v0.5.0 — code-based verdict per dataset (the judge)
+├── coverage_gen.py           multilingual question generator (en/yue/zh-Hant/zh-Hans)
+├── coverage_run.py           async POST /turn runner, locale_override per row
+├── coverage_report.py        Markdown + JSON aggregator over contracts.evaluate
+└── cli.py                    `python -m smcity_fuzz coverage {generate,run,report}`
 
 otp/                          OpenTripPlanner 2 sidecar (v0.4.4)
 ├── docker-compose.yml        pinned 2.6.0, loopback :8080, 4 GB heap
@@ -142,24 +149,25 @@ web/                          archive-underground UI (vanilla JS + WebSocket)
 data/                         static reference data — MTR stations + lines only;
                               HKHA name_tc overlay is the one remaining
                               hand-curated file, all other data is live
-tests/                        232 unit + 7 integration tests
+scripts/                      llm_ping.py, live_smoke.py, coverage_v2.sh, rejudge_v1.sh
+tests/                        338 unit tests; one integration suite per engine
 docs/                         GOAL / PLAN / DEPLOY / ACCURACY_REVIEW / audit /
                               architecture / research
 ```
 
-## Feature inventory (v0.4.5)
+## Feature inventory (v0.5.3)
 
-**Tool registry — 27 tools**
+**Tool registry — 55 tools**
 
 | domain | tools |
 |---|---|
-| `transport.*` (13) | `get_mtr_next_trains`, `get_kmb_eta_by_stop`, `get_kmb_eta_by_route_stop`, `get_citybus_eta_by_route_stop`, `get_citybus_route_stops`, `get_gmb_eta`, `find_stops_near_point`, `find_stops_by_name`, `plan_simple_route`, `plan_walking_route`, `plan_taxi_estimate`, `plan_journey`, `plan_multimodal_journey` |
+| `transport.*` (12) | `get_mtr_next_trains`, `get_kmb_eta_by_stop`, `get_kmb_eta_by_route_stop`, `get_citybus_eta_by_route_stop`, `get_citybus_route_stops`, `get_gmb_eta`, `find_stops_near_point`, `find_stops_by_name`, `plan_simple_route` (MTR-only), `plan_walking_route`, `plan_journey` (default), `plan_multimodal_journey` (OTP2). v0.5.1 scope tags surface MTR-only / Citybus-only / KMB-only / etc. to the LLM. **No taxi mode** — transit + walking via real HK APIs only. |
 | `context.*` (4) | `get_current_weather`, `get_active_warnings`, `get_9day_forecast`, `get_aqhi` |
 | `facility.*` (2) | `find_nearby_courts`, `find_nearby_pools` (both live CSDI) |
 | `housing.*` (2) | `get_estate_info`, `list_estates_in_district` (live HKHA API) |
-| `geo.*` (2) | `address_lookup`, `search_osm_pois` (30 OSM categories in one tool) |
+| `geo.*` (32) | `address_lookup` (ALS) + 30 per-category POI tools (`find_dentist`, `find_bench`, `find_convenience_store`, …) auto-generated from `_CATEGORIES` (v0.5.0). |
 | `csdi.*` (1) | `query_features` (generic ArcGIS FeatureServer query) |
-| `meta.*` (3) | `ask_user`, `what_languages_are_supported`, `forget_me` |
+| `meta.*` (3) | `ask_user` (`[FALLBACK]` since v0.5.1), `what_languages_are_supported`, `forget_me` |
 
 **Pipeline capabilities**
 
@@ -167,6 +175,11 @@ docs/                         GOAL / PLAN / DEPLOY / ACCURACY_REVIEW / audit /
 - OpenCC `s2hk` / `hk2s` script normalisation.
 - Deterministic fast-path classifier for weather / AQI / warnings / chitchat → skips first LLM hop.
 - Parallel tool dispatch via `asyncio.gather`, per-session KV-cache pin (`user=session_id` forwarded to LM Studio), streaming final pass token-by-token over WebSocket.
+- **Three-stage lifecycle guard rails (v0.5.1)** — declarative engines wrap the LLM-turn at each stage:
+  - Pre-execution gate (`smcity/tool_call_gates.py`) rejects ill-shaped tool-call proposals (e.g., leading with `meta.ask_user`) and re-prompts the LLM once with named alternatives.
+  - Post-execution chain rule (`smcity/chain_rules.py`) auto-completes known tool chains deterministically (POI category inference across EN / yue / zh-Hant / zh-Hans, no LLM re-roll).
+  - Post-synthesis invariant (`smcity/synthesis_invariants.py`) rejects replies that deny non-empty tool data; multilingual denial detector covers all 13 supported languages.
+- **Tool scope tags (v0.5.1)** — `ToolScope.{DEFAULT,SPECIALIZED,FALLBACK}` + free-form `domain` auto-render `[…]` markers into every tool description. Disambiguation moves from per-tool prose to structured schema.
 - Cantonese few-shot exemplars + 60-entry formal→colloquial deterministic polish → natural HK Cantonese output.
 - Harmony-format leak extractor (canonical + bare `tool_name json{…}` forms) with SSRF guard via `known_tool_names`.
 - Deterministic source-footer rewriter (strips LLM-invented `src:` lines, appends the real citations).
@@ -187,7 +200,8 @@ See [docs/DEPLOY.md](docs/DEPLOY.md) for the full threat model. Short version: T
 - [docs/DEPLOY.md](docs/DEPLOY.md) — Tailscale deployment + threat model + LM Studio tuning
 - [docs/DATASETS.md](docs/DATASETS.md) — 35-workbook-dataset → tool coverage map
 - [docs/ACCURACY_REVIEW.md](docs/ACCURACY_REVIEW.md) — response-quality risk register for the fuzzer
-- [docs/architecture/TOOL_CATALOG.md](docs/architecture/TOOL_CATALOG.md) — formal 27-tool registry
+- [docs/architecture/TOOL_CATALOG.md](docs/architecture/TOOL_CATALOG.md) — formal 55-tool registry
+- [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) — system architecture, including the v0.5.x lifecycle guard rails (§3.7) and tool scope tags (§3.8)
 - [docs/audit/](docs/audit/) — supply-chain, code, enhancement audits (v0.3.0)
 - [docs/research/](docs/research/) — data.gov.hk APIs, agentic tool-calling, CSDI endpoints, multilingual stack, prior art
 - [CHANGELOG.md](CHANGELOG.md) — per-release notes

@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.5.4] — 2026-05-24
+
+**README refresh** — surgical patch. No code change. The repo's `README.md` was dated v0.4.5 (2026-04-23) and predated the v0.5.0 → v0.5.3 work; a new contributor or returning maintainer landing on the README would miss the entire v0.5.x story.
+
+### What was stale
+
+- Status banner: `**v0.4.5** · 2026-04-23`, `27 live tools`, `232 unit tests + 7 integration tests`.
+- Layout tree: `27-tool agent`; described the old `synth.py` / `judge.py` / `runner.py` / `store.py` / `export.py` fuzz layout (replaced by `contracts.py` / `coverage_*.py` in v0.5.0); missing the three v0.5.1 engine modules.
+- Feature inventory: claimed `geo.search_osm_pois` (mega-tool replaced in v0.5.0); listed a non-existent `transport.plan_taxi_estimate` (taxi is not a supported mode — see `feedback_no_taxi` memory); missing the v0.5.1 lifecycle engines + scope tags.
+- Documentation list: only linked `TOOL_CATALOG.md`, not `ARCHITECTURE.md`.
+
+### Files changed
+
+- `README.md`
+  - Status banner bumped to `**v0.5.3** · 2026-05-24` (the previous shipping commit; v0.5.4 is this README patch itself). Tool count 27 → 55. Test count 232 → 338. New bullets summarise the three-stage lifecycle guard rails and the `ToolScope`/`domain` schema, linking to `docs/architecture/ARCHITECTURE.md §3.7`/`§3.8`.
+  - Layout tree: tool count 27 → 55, fuzz subtree rewritten for the v0.5.0 contracts shape, three new lifecycle modules added (`tool_call_gates.py`, `chain_rules.py`, `synthesis_invariants.py`), `tools/` line annotated with the per-domain breakdown and the scope/domain note, `scripts/` line added (now includes `live_smoke.py`), test count 232 → 338.
+  - Feature inventory: transport list cleaned (taxi removed; scope tags noted; default vs MTR-only vs OTP2 disambiguated inline); geo expanded from `(2)` to `(32)` with the per-category POI tools called out; `meta.ask_user` annotated as `[FALLBACK]`; pipeline-capabilities section gained a paragraph on the three lifecycle engines (one bullet per stage) and a paragraph on the scope-tag schema.
+  - Documentation links: added `ARCHITECTURE.md` with a pointer to §3.7 + §3.8.
+
+### Why this is worth its own patch
+
+Documentation drift is silent: tests keep passing, lint stays clean, but the README is the first artefact a newcomer reads. Letting the README claim 27 tools when there are 55, or listing a tool we deliberately removed, undermines trust in the rest of the doc. Pinning the README to current reality keeps onboarding and self-orientation cheap.
+
+No code touched. 338 tests still pass. Ruff + mypy strict still clean.
+
 ## [0.5.3] — 2026-05-24
 
 **Architecture docs + integration coverage** — docs/test patch. No runtime behaviour change; the goal is to make the v0.5.1 lifecycle abstraction discoverable in the architecture doc and provable end-to-end through orchestrator tests for all three engines (not just the gate). A pre-existing mypy strict error in `smcity/tools/__init__.py` is fixed as bonus hygiene.
