@@ -205,3 +205,203 @@ async def test_forced_locale_override_is_respected(
     resp = await orch.handle_turn(req)
     assert resp.lang.source == "forced"
     assert resp.lang.primary_lang == "jpn"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_chain_rule_auto_dispatches_poi_followup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end proof of the chain_rules AutoDispatch path:
+    LLM calls geo.address_lookup → chain rule infers 'dentist' from user
+    text → orchestrator deterministically dispatches geo.find_dentist with
+    the resolved lat/lng → both tools appear in tool_trace. No LLM re-roll
+    is needed for the chain step (the AutoDispatch path is deterministic)."""
+    # ALS upstream — returns Tsim Sha Tsui at 22.30, 114.17.
+    respx.get("https://www.als.gov.hk/lookup").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "SuggestedAddress": [
+                    {
+                        "Address": {
+                            "PremisesAddress": {
+                                "EngPremisesAddress": {
+                                    "BuildingName": "Tsim Sha Tsui",
+                                    "EngDistrict": {"DcDistrict": "Yau Tsim Mong"},
+                                },
+                                "ChiPremisesAddress": {"BuildingName": "尖沙咀"},
+                                "GeospatialInformation": {
+                                    "Latitude": "22.30",
+                                    "Longitude": "114.17",
+                                },
+                            }
+                        }
+                    }
+                ]
+            },
+        )
+    )
+    # Overpass upstream — returns two dentists near the resolved point.
+    respx.post("https://overpass-api.de/api/interpreter").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "elements": [
+                    {
+                        "type": "node",
+                        "id": 1001,
+                        "lat": 22.301,
+                        "lon": 114.171,
+                        "tags": {"name": "Dr Chan Dental Clinic", "amenity": "dentist"},
+                    },
+                    {
+                        "type": "node",
+                        "id": 1002,
+                        "lat": 22.302,
+                        "lon": 114.172,
+                        "tags": {"name": "Wong Dental Surgery", "amenity": "dentist"},
+                    },
+                ]
+            },
+        )
+    )
+
+    # LLM call 1: fires address_lookup only — the chain rule will infer the
+    # POI category from "dentist" in the user text and AutoDispatch find_dentist.
+    first = LLMReply(
+        text="",
+        tool_calls=[
+            {
+                "id": "call-addr",
+                "name": "geo.address_lookup",
+                "arguments": json.dumps({"query": "Tsim Sha Tsui"}),
+            }
+        ],
+        usage={},
+        elapsed_ms=80,
+    )
+    # Synthesis fallback (chat_stream is unmocked → empty → chat() fallback).
+    synth = LLMReply(
+        text="Two dentists near TST: Dr Chan Dental Clinic and Wong Dental Surgery.",
+        tool_calls=[],
+        usage={},
+        elapsed_ms=40,
+    )
+    from smcity import orchestrator as orch_module
+
+    monkeypatch.setattr(orch_module, "chat", _scripted_chat([first, synth]))
+
+    store = SessionStore(tmp_path / "sessions.sqlite3")
+    orch = Orchestrator(store)
+    req = TurnRequest(
+        session_id="chain-poi-1",
+        text="where's the nearest dentist near TST?",
+        locale_override="en",
+    )
+
+    events: list[Any] = []
+    resp = await orch.handle_turn(req, emit=events.append)
+
+    # Both tools must have run successfully.
+    tool_names = [t.name for t in resp.tool_trace]
+    assert "geo.address_lookup" in tool_names
+    assert "geo.find_dentist" in tool_names
+    for t in resp.tool_trace:
+        assert t.status == "ok", f"expected ok, got {t.name}={t.status}"
+
+    # The chain.fired event identifies the rule + the deterministic kind.
+    chain_events = [e for e in events if e.type == "chain.fired"]
+    assert len(chain_events) == 1, f"expected one chain.fired event, got {len(chain_events)}"
+    assert chain_events[0].data["rule"] == "poi_address_to_find"
+    assert chain_events[0].data["kind"] == "auto_dispatch"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_synthesis_invariant_retries_on_data_denial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end proof of the synthesis_invariants retry path:
+    tool returns two dentists, the LLM's synthesis denies the data
+    ("I couldn't find any"), the data_denial invariant fires, a corrective
+    retry produces a reply that cites at least one record. The bad reply
+    is replaced by the good one before it ships to the user."""
+    respx.post("https://overpass-api.de/api/interpreter").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "elements": [
+                    {
+                        "type": "node",
+                        "id": 1001,
+                        "lat": 22.30,
+                        "lon": 114.17,
+                        "tags": {"name": "Dr Chan Dental Clinic", "amenity": "dentist"},
+                    },
+                    {
+                        "type": "node",
+                        "id": 1002,
+                        "lat": 22.30,
+                        "lon": 114.17,
+                        "tags": {"name": "Wong Dental Surgery", "amenity": "dentist"},
+                    },
+                ]
+            },
+        )
+    )
+
+    # User gives coords directly so the chain rule has no precondition
+    # (no address_lookup fires) — keeps this test focused on the invariant.
+    first = LLMReply(
+        text="",
+        tool_calls=[
+            {
+                "id": "call-find",
+                "name": "geo.find_dentist",
+                "arguments": json.dumps({"lat": 22.30, "lng": 114.17}),
+            }
+        ],
+        usage={},
+        elapsed_ms=80,
+    )
+    # Synthesis fallback denies the data — should trip the invariant.
+    bad_synth = LLMReply(
+        text="I couldn't find any dentists in your area, sorry.",
+        tool_calls=[],
+        usage={},
+        elapsed_ms=40,
+    )
+    # Corrective retry — cites the first record.
+    good_synth = LLMReply(
+        text="Dr Chan Dental Clinic is right nearby.",
+        tool_calls=[],
+        usage={},
+        elapsed_ms=40,
+    )
+    from smcity import orchestrator as orch_module
+
+    monkeypatch.setattr(orch_module, "chat", _scripted_chat([first, bad_synth, good_synth]))
+
+    store = SessionStore(tmp_path / "sessions.sqlite3")
+    orch = Orchestrator(store)
+    req = TurnRequest(
+        session_id="invariant-1",
+        text="dentist at lat 22.30 lng 114.17",
+        locale_override="en",
+    )
+
+    events: list[Any] = []
+    resp = await orch.handle_turn(req, emit=events.append)
+
+    # The invariant must have fired with the right metadata.
+    inv_events = [e for e in events if e.type == "invariant.violated"]
+    assert len(inv_events) == 1, f"expected one invariant.violated event, got {len(inv_events)}"
+    assert inv_events[0].data["name"] == "data_denial"
+    assert inv_events[0].data["tool"] == "geo.find_dentist"
+    assert inv_events[0].data["records"] == 2
+
+    # Final reply must be the GOOD retry, not the denial.
+    assert "Dr Chan" in resp.text
+    assert "couldn't find" not in resp.text.lower()
+    assert "no data" not in resp.text.lower()

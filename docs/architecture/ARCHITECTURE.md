@@ -1,8 +1,8 @@
 # Architecture — HK Smart City Agent
 
-**Version:** 2026-04-21 · v0.1 (pre-implementation)
+**Version:** 2026-05-24 · v0.5.3 (post-implementation; see `CHANGELOG.md` for version history)
 **Owner:** Lab of Social Robotics
-**Status:** Design — to be validated with first spike before code is committed.
+**Status:** Implementation. Design intent below; concrete additions since v0.5.0 are in §3.7.
 
 ---
 
@@ -168,32 +168,203 @@ Policy: `clarify` if filling the missing slot via a tool call would cost more th
 
 ### 3.6 LLM orchestrator loop
 
+The loop below is the v0.5.3 implementation in `smcity/orchestrator.py`. The
+three guard points labelled **(A) (B) (C)** are the lifecycle engines
+described in §3.7 — each is a declarative, replaceable module rather than
+inline logic.
+
 ```
 on_turn(session, text):
-    lang = language_router(text, session.slots.locale)
-    text_canon = normalise(text, lang)
-    slots = update_slots(session, lang, text_canon)
-    plan = decide_action(slots)               # "clarify" | "call" | "answer"
+    lang   = language_router(text, session.slots.locale)
+    slots  = load_or_init(session)
+    if fast_classifier.intent(text) == "chitchat":
+        return canned_reply_in(lang)
 
-    if plan == "clarify":
-        return formatter.clarify(slots, lang)
+    if fast_classifier.intent(text) has deterministic tools:
+        results = await asyncio.gather(*dispatch(tool) for tool in fast_classifier.tools)
+        return await synthesise_with_invariants(text, results, lang)   # (C)
 
-    messages = build_messages(system_prompt, session.history, text_canon, slots)
-    resp = llm.chat(messages, tools=registered_tools, parallel_tool_calls=True, stream=True)
+    messages = build_messages(system_prompt, session.history, text, slots)
+    first    = await llm.chat(messages, tools=registry.openai_schemas(),
+                              parallel_tool_calls=True)
 
-    if resp.tool_calls:
-        results = await asyncio.gather(*[dispatch(tc) for tc in resp.tool_calls])
-        messages += tool_result_messages(results)
-        resp = llm.chat(messages, tools=registered_tools, stream=True)  # 2nd hop
+    # (A) Pre-execution gate — smcity/tool_call_gates.py
+    if gate_violation := apply_gates(first.tool_calls):
+        first = await llm.chat(messages + [first.assistant, gate_violation.hint],
+                               tools=registry.openai_schemas())
 
-    # bounded ReAct fallback
-    if resp.tool_calls and react_steps < 2:
-        ...
+    if first.tool_calls:
+        tool_results = await asyncio.gather(*[dispatch(tc) for tc in first.tool_calls])
+        messages    += [first.assistant, *tool_messages(tool_results)]
 
-    return formatter.finalise(resp, lang, sources=results)
+        # (B) Post-execution chain rule — smcity/chain_rules.py
+        if (rule, continuation) := apply_chain_rules(text, tool_results):
+            match continuation:
+                case AutoDispatch(tool, args):
+                    followup = await dispatch_one(tool, args)
+                    messages += [synthetic_assistant(tool, args),
+                                 tool_message(followup)]
+                    tool_results.append(followup)
+                case LLMHint(hint):
+                    retry = await llm.chat(messages + [hint],
+                                           tools=registry.openai_schemas())
+                    # consume retry.tool_calls if any
+
+        messages.append(language_stick_reminder(lang))
+        reply = await llm.chat_stream(messages)              # streams to UI
+
+        # (C) Post-synthesis invariant — smcity/synthesis_invariants.py
+        reply = await maybe_retry_for_invariants(reply, messages,
+                                                 tool_results, lang)
+    else:
+        reply = first.text
+
+    return formatter.finalise(reply, lang, sources=tool_results)
 ```
 
-### 3.7 Response formatter
+Notes:
+
+- The orchestrator never loops. Each guard fires AT MOST one corrective
+  LLM re-prompt per turn; if the retry persists with the same bad shape
+  or the retry call errors, the original output is accepted and we move on.
+- `parallel_tool_calls=True` is preserved through (A) and (B): the gate
+  redirect and the chain-completion follow-up both re-issue the call with
+  parallel-tool-calls enabled.
+- The two LLM call paths (`chat` for tool-calling stages, `chat_stream`
+  for the final synthesis) are kept distinct so the UI gets incremental
+  tokens but the structural guards can run against settled bytes.
+
+### 3.7 Lifecycle guard rails (v0.5.x)
+
+The orchestrator delegates structural correctness checks to three small
+modules, one per stage of the LLM-turn lifecycle. This replaces ad-hoc
+inline checks (the v0.5.0 POI chain-completion patch lived in
+`orchestrator.py` until v0.5.1 promoted it into a declarative engine) and
+ad-hoc disambiguation prose (v0.5.1's `ToolScope`/`domain` schema replaces
+per-tool "do NOT use for X" sentences).
+
+| Stage             | Module                              | Inputs                          | First rule registered            |
+|-------------------|-------------------------------------|---------------------------------|----------------------------------|
+| Pre-execution     | `smcity/tool_call_gates.py`         | LLM's proposed tool calls       | `ASK_USER_ONLY_GATE`             |
+| Post-execution    | `smcity/chain_rules.py`             | Tool results + user query       | `POI_CHAIN_RULE` (replaces Fix 3)|
+| Post-synthesis    | `smcity/synthesis_invariants.py`    | Reply text + tool results       | `DATA_DENIAL_INVARIANT`          |
+
+**Common shape.** Every engine exports:
+
+```python
+def apply_<engine>(<stage_inputs>, rules=DEFAULT) -> Violation | None: ...
+
+@dataclass(frozen=True, slots=True)
+class <Engine>Rule:
+    name: str
+    check: Callable[[...], Violation | None]
+
+@dataclass(frozen=True, slots=True)
+class Violation:
+    name: str               # for telemetry
+    kind: str               # category slug
+    corrective_prompt: str  # system message used by the orchestrator on retry
+```
+
+The orchestrator's only job per engine is: call `apply_*(…)`, if it
+returns a violation, append the `corrective_prompt` to the message
+history, re-prompt the LLM once, and continue. No engine knows about
+session storage, language detection, or upstream services — they are
+pure functions of their inputs.
+
+**Adding a new rule.** Append a `*_Rule` instance to the engine's
+`DEFAULT_*` list. Ordering matters: earlier rules take precedence when
+multiple match the same turn. No orchestrator edit is needed.
+
+**Why this shape.**
+- Each engine is independently unit-testable (`tests/test_chain_rules.py`,
+  `tests/test_synthesis_invariants.py`, `tests/test_tool_call_gates.py`)
+  and integration-tested through the orchestrator
+  (`tests/test_orchestrator.py`).
+- The orchestrator stays a thin glue layer — three integration points,
+  ~10 lines each — so the engine logic and the I/O concerns evolve
+  separately.
+- Behavioural fixes ship as ~30-line declarative additions, not as
+  hot-path orchestrator surgery. This is what the v0.5.0 → v0.5.1
+  refactor unlocked.
+
+#### 3.7.1 `tool_call_gates` — pre-execution
+
+A gate inspects the LLM's *proposed* tool calls. If the shape is known
+to be unhelpful (e.g., the only proposed call is `meta.ask_user` —
+indicating the LLM led with a clarifying question instead of trying a
+search tool), we reject and re-prompt with a hint that names the
+families of search tools the LLM should have tried.
+
+#### 3.7.2 `chain_rules` — post-execution
+
+A chain rule asks: "given the tools we just ran successfully, is there
+a follow-up we expected but didn't see?" For POI queries, the canonical
+chain is `geo.address_lookup` → `geo.find_<category>`. When the LLM
+fires the first but not the second, the rule produces a `Continuation`:
+
+- `AutoDispatch(tool, args)` when the missing tool + args can be
+  inferred unambiguously from the user's text (POI category inference
+  uses 30 multilingual keyword patterns across EN / yue / zh-Hant /
+  zh-Hans). The orchestrator dispatches deterministically — no LLM
+  re-roll.
+- `LLMHint(text)` when inference is ambiguous (multiple plausible
+  successors). The orchestrator appends the hint as a system message
+  and re-prompts; this is the fallback equivalent of the old v0.5.0
+  Fix 3 behaviour.
+
+#### 3.7.3 `synthesis_invariants` — post-synthesis
+
+An invariant inspects the LLM's *reply text* against the tool results
+that informed it. The first registered invariant (`DATA_DENIAL_INVARIANT`)
+catches the common failure where a tool returned non-empty records but
+the reply denies having data ("I couldn't find any" after 5 dentists
+were returned).
+
+Three guards keep false-positive rate low:
+
+1. The reply must contain explicit denial language. The detector
+   regex covers all 13 supported languages from v0 (EN, yue, zh-Hant,
+   zh-Hans, ja, ko, fr, de, es, th, vi, id, tl) — see the
+   `all-languages-from-v0` invariant in `docs/GOAL.md`.
+2. An `ok`-status tool must have returned non-empty records.
+3. The reply must NOT mention any record name (substring match across
+   common name keys: `name_en`, `name`, `name_tc`, `name_zh`, `route`,
+   `destination_en`, `address`, …).
+
+Only when all three hold do we issue a corrective re-prompt with the
+records pre-quoted; if the LLM cites any record in its existing reply,
+we leave it alone (false-negative bias is preferred to false-positive
+re-rolls).
+
+### 3.8 Tool scope tags (v0.5.1)
+
+Tool descriptions historically carried prose disambiguation ("do NOT
+use for Citybus"), which scaled poorly and degraded as the catalog grew.
+v0.5.1 added structured fields on every `ToolSpec`:
+
+```python
+class ToolScope(StrEnum):
+    DEFAULT      = "default"
+    SPECIALIZED  = "specialized"
+    FALLBACK     = "fallback"
+
+@dataclass
+class ToolSpec(Generic[ArgsT, ResultT]):
+    ...
+    scope:  ToolScope = ToolScope.DEFAULT
+    domain: str | None = None
+```
+
+The registry auto-prepends `[DEFAULT: <domain>]` / `[SPECIALIZED:
+<domain>]` / `[FALLBACK]` to every description rendered into the
+OpenAI tool-call schema. The system prompt teaches the marker semantics
+once. Today 11 transit + meta tools are tagged where confusion was
+documented in the v0.4.16 partial report; un-tagged tools render plain
+descriptions (preserving existing behaviour until evidence demands a
+tag).
+
+### 3.9 Response formatter
 
 - If `lang.primary_lang == "yue"` and the LLM reply is formal 繁體, pass through a Cantonese post-processor (YueLLM-7B or Qwen2.5-7B-Instruct prompted with Cantonese style exemplars) — this is the mitigation for gpt-oss-120b's weak written-Cantonese surface form documented in `04_multilingual_language_stack.md`.
 - Always append a compact "source · timestamp" footer for auditability.

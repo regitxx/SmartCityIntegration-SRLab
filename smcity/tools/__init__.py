@@ -1,5 +1,7 @@
 """Tool registry — every external read goes through here."""
 
+from typing import Any
+
 from smcity.tools.context import (
     ACTIVE_WARNINGS_TOOL,
     AQHI_TOOL,
@@ -30,8 +32,13 @@ from smcity.tools.transport_simple_modes import (
 
 
 def build_default_registry() -> ToolRegistry:
+    # Annotated as `ToolSpec[Any, Any]` because the catalog is heterogeneous
+    # in its generic parameters (each tool has its own ArgsT / ResultT). The
+    # registry's `.register()` accepts any `ToolSpec[Any, Any]`, but a bare
+    # tuple of mixed-generic specs upcasts to `tuple[object, ...]`, which
+    # mypy strict rejects. Explicit annotation pins the variance.
     registry = ToolRegistry()
-    for spec in (
+    specs: list[ToolSpec[Any, Any]] = [
         # geo
         ADDRESS_LOOKUP_TOOL,
         *OSM_POI_TOOLS,  # 30 thin per-category POI tools (geo.find_dentist, …)
@@ -65,7 +72,8 @@ def build_default_registry() -> ToolRegistry:
         ASK_USER_TOOL,
         WHAT_LANGUAGES_TOOL,
         FORGET_ME_TOOL,
-    ):
+    ]
+    for spec in specs:
         registry.register(spec)
     return registry
 

@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.5.3] — 2026-05-24
+
+**Architecture docs + integration coverage** — docs/test patch. No runtime behaviour change; the goal is to make the v0.5.1 lifecycle abstraction discoverable in the architecture doc and provable end-to-end through orchestrator tests for all three engines (not just the gate). A pre-existing mypy strict error in `smcity/tools/__init__.py` is fixed as bonus hygiene.
+
+### What was missing
+
+- `docs/architecture/ARCHITECTURE.md` was dated 2026-04-21 (v0.1 pre-implementation) and predated the v0.5.x lifecycle engines. A new contributor landing on the doc would miss the structural shift.
+- `tests/test_orchestrator.py` had only one integration test for the three lifecycle engines — `test_ask_user_gate_redirects_llm_to_search_tool`. `chain_rules` and `synthesis_invariants` were unit-tested in isolation but not provably wired through the full turn lifecycle. Asymmetric coverage made the lifecycle abstraction harder to evolve confidently.
+- `smcity/tools/__init__.py` carried a mypy strict error (introduced in v0.5.0 when the 30 POI tools were unpacked into the registry tuple) that mixed `ToolSpec[A, B]` with `ToolSpec[C, D]` and upcasted to `tuple[object, ...]`. Pre-existing; not regressed by v0.5.1/v0.5.2 but worth fixing while running quality gates.
+
+### Files changed
+
+- `docs/architecture/ARCHITECTURE.md`
+  - Header bumped from `v0.1 (pre-implementation)` to `v0.5.3 (post-implementation)`.
+  - §3.6 (LLM orchestrator loop): pseudocode replaced with the v0.5.3 implementation, labelling the three guard points **(A) pre-execution gate**, **(B) post-execution chain rule**, **(C) post-synthesis invariant** that match the engine modules in code.
+  - §3.7 (NEW) — Lifecycle guard rails: documents the three engines, the common `apply_*(…) -> Violation | None` shape, the declarative rule pattern, and where each unit/integration test lives. Sub-sections 3.7.1/3.7.2/3.7.3 cover each engine's role in detail.
+  - §3.8 (NEW) — Tool scope tags: documents the `ToolScope` enum + `domain` field that auto-renders `[DEFAULT: …]` / `[SPECIALIZED: …]` / `[FALLBACK]` markers into every OpenAI tool description.
+  - Existing §3.7 (Response formatter) renumbered to §3.9.
+- `tests/test_orchestrator.py` — two new integration tests, both using `respx.mock` for upstream HTTP and `monkeypatch` for the LLM scripted-replies pattern already used by the existing tests:
+  - `test_chain_rule_auto_dispatches_poi_followup` — proves that when the LLM fires only `geo.address_lookup` on a POI query, the chain rule infers the category from the user text and the orchestrator deterministically dispatches `geo.find_dentist` with the resolved lat/lng. Asserts both tools end up in `tool_trace`, the `chain.fired` telemetry event names the right rule + `auto_dispatch` kind.
+  - `test_synthesis_invariant_retries_on_data_denial` — proves that when a tool returns non-empty records but the LLM's synthesis denies the data ("I couldn't find any"), the invariant fires and the corrective retry's reply (which cites a record) is what ships to the user. Asserts the `invariant.violated` telemetry event names `data_denial` + the tool + the record count.
+- `smcity/tools/__init__.py` — `build_default_registry()` now declares `specs: list[ToolSpec[Any, Any]]` to pin the variance through the tuple unpack. Behaviour identical; mypy strict was reporting `Argument 1 to "register" has incompatible type "object"; expected "ToolSpec[Any, Any]"`.
+
+### Why this is architectural and not a patch
+
+- The lifecycle abstraction now has a single home in the architecture doc. Future contributors don't need to read three module headers + cross-reference the orchestrator to understand what runs at what stage of an LLM turn.
+- All three engines now have parallel coverage:
+
+  | Engine                     | Unit tests                                 | Orchestrator integration test                              |
+  |----------------------------|--------------------------------------------|------------------------------------------------------------|
+  | `tool_call_gates.py`       | `tests/test_tool_call_gates.py` (10)       | `test_ask_user_gate_redirects_llm_to_search_tool`          |
+  | `chain_rules.py`           | `tests/test_chain_rules.py` (15)           | **`test_chain_rule_auto_dispatches_poi_followup`** (new)   |
+  | `synthesis_invariants.py`  | `tests/test_synthesis_invariants.py` (31)  | **`test_synthesis_invariant_retries_on_data_denial`** (new)|
+
+- Mypy strict is now **clean across all 39 source files** (was 1 pre-existing error). The strict-mode signal is restored as a meaningful gate going forward.
+- 338 tests pass (336 → 338, +2 integration tests). Ruff (lint + format) clean.
+
 ## [0.5.2] — 2026-05-24
 
 **POI tool description trim** — patch release that addresses the prose half of the v0.5.0 prompt-bloat regression. The structural enforcement engines from v0.5.1 only fire if the LLM returns tool calls in the first place; on gpt-oss-120b the ~13K-token tool catalog was producing 400-rejections and prompt-processing timeouts on transport datasets. This trims the 30 POI tool descriptions from ~45 words to ~13 words each.
