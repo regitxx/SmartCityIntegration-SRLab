@@ -81,6 +81,8 @@ current_tag_for() {
 }
 
 # Docker network name. Compose prefixes it with the project name (the dir).
+# Kept for potential future use; the current http_probe goes via the
+# nginx-router container which is already in the network.
 network_name() {
   docker network ls --format '{{.Name}}' | grep -E '^([a-z0-9]+_)?smcity-net$' | head -1
 }
@@ -104,18 +106,16 @@ wait_healthy() {
   return 2
 }
 
-# Re-check /health from inside the bridge network. Catches "container is up
-# but bound to the wrong address" issues that Docker health alone misses.
+# Re-check /health from inside the bridge network. Catches "container is
+# up but bound to the wrong address" issues that Docker health alone
+# misses. Routes the probe through the already-running smcity-router
+# container (nginx:alpine ships wget) so we don't depend on docker-hub
+# pulls succeeding at deploy time — the credential-helper plumbing on
+# the Mac Studio is flakey in non-login shells.
 http_probe() {
   local container="$1"
-  local net
-  net="$(network_name)"
-  if [[ -z "$net" ]]; then
-    warn "could not resolve smcity-net network name — skipping HTTP probe"
-    return 0
-  fi
-  docker run --rm --network "$net" curlimages/curl:latest \
-    -sSf --max-time 5 "http://${container}:8080/health" >/dev/null 2>&1
+  docker exec smcity-router \
+    wget -qO- --tries=1 --timeout=5 "http://${container}:8080/health" >/dev/null 2>&1
 }
 
 # Recreate one replica with a new image tag. On failure (Docker-health or

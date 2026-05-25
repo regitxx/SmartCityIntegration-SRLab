@@ -42,6 +42,10 @@ COPY --chown=smcity:smcity smcity ./smcity
 COPY --chown=smcity:smcity smcity_fuzz ./smcity_fuzz
 COPY --chown=smcity:smcity data ./data
 COPY --chown=smcity:smcity web ./web
+# pyproject.toml is the single source of truth for the version string;
+# smcity/__init__.py reads it at import time (see v0.5.7). Copy it into
+# the runtime image so __version__ works in production.
+COPY --chown=smcity:smcity pyproject.toml ./pyproject.toml
 
 # /app/state holds the session DB (sessions.sqlite3). In production this
 # directory is overlaid by a named volume so sessions persist across

@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.5.7] — 2026-05-25
+
+**Single source of truth for the package version.** Surfaced immediately by the v0.5.6 deploy: blue and green were correctly running on `smcity:0.5.6`, but `GET /health` reported `"version":"0.5.0"`. The image tag, the Docker container's image config, and the version string the agent shipped to clients had drifted apart.
+
+### Root cause
+
+`smcity/__init__.py` carried a hardcoded `__version__ = "0.5.0"`. Every release since v0.5.1 bumped `pyproject.toml` but nobody bumped `__init__.py`. The release checklist had a silent landmine — easy to miss for five releases in a row, and surfaced only at the moment a deployed agent was asked to identify itself.
+
+### Fix
+
+`smcity/__init__.py` now reads the version from `pyproject.toml` at import time via `tomllib`. There is one source of truth for the package version (the `[project] version = "X.Y.Z"` line). Bumping `pyproject.toml` propagates to `__version__` automatically; drift is structurally impossible.
+
+The runtime Docker image previously copied only `smcity/`, `smcity_fuzz/`, `data/`, `web/` to `/app/`. The Dockerfile now also copies `pyproject.toml` to `/app/pyproject.toml` so the runtime lookup works in production exactly as it does in dev.
+
+If the lookup fails (file missing, malformed TOML, missing `[project]` section), `__version__` falls back to `"0.0.0+unknown"` — surfacing the misconfiguration in `/health` instead of silently returning a wrong-but-plausible number.
+
+### Files changed
+
+- `smcity/__init__.py` — `_read_version_from_pyproject()` + `__version__ = _read_version_from_pyproject()`. The exception path returns `"0.0.0+unknown"` so a broken read is detectable instead of being mistaken for a real version.
+- `Dockerfile` — new `COPY --chown=smcity:smcity pyproject.toml ./pyproject.toml` in the runtime stage. Adds ~600 bytes to the image; negligible.
+- `pyproject.toml` — bumped 0.5.6 → 0.5.7.
+
+### What this prevents going forward
+
+Any future release just edits `pyproject.toml` and CHANGELOG. The `__version__` constant, the OpenTelemetry `version=` tag, the startup log line, the `/health` response, and the structured Prometheus / OTel attribute all read from the same one source. The "I bumped version but `/health` still says the old one" class of incident is gone.
+
+### Tests
+
+338 tests still pass. Ruff (lint + format) clean. Mypy strict clean across 39 source files. Local smoke: `python -c "import smcity; print(smcity.__version__)"` reports `0.5.7`.
+
 ## [0.5.6] — 2026-05-25
 
 **Layered zero-downtime deploys.** Tooling-only patch. The v0.5.0 `deploy.sh` was theoretically zero-downtime but had three real-world failure modes that caused past deploys to drop the public endpoint. Rewritten to fail safe.
