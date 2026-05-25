@@ -30,7 +30,11 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: smcity:0.5.0
+    # Image tag is per-replica so layered (one-at-a-time) deploys can pin
+    # blue to a new tag while green stays on the prior one — keeps the
+    # surviving replica on a known-good build during the roll. Default is
+    # the current shipping tag; deploy.sh overrides BLUE_TAG via env.
+    image: smcity:${BLUE_TAG:-0.5.5}
     container_name: smcity-agent-blue
     restart: unless-stopped
     extra_hosts:
@@ -65,9 +69,11 @@ services:
       retries: 3
 
   smcity-agent-green:
-    # Inherits the build context from blue (same image tag) — compose builds
-    # once and both replicas use it.
-    image: smcity:0.5.0
+    # Inherits the build context from blue. The tag is parameterised
+    # separately so the layered deploy can lag green behind blue during
+    # the roll — when blue is upgrading, green stays on the prior tag and
+    # serves 100% of traffic via nginx's proxy_next_upstream.
+    image: smcity:${GREEN_TAG:-0.5.5}
     container_name: smcity-agent-green
     restart: unless-stopped
     extra_hosts:

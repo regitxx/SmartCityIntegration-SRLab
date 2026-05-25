@@ -2,6 +2,42 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.5.6] — 2026-05-25
+
+**Layered zero-downtime deploys.** Tooling-only patch. The v0.5.0 `deploy.sh` was theoretically zero-downtime but had three real-world failure modes that caused past deploys to drop the public endpoint. Rewritten to fail safe.
+
+### What was wrong in the v0.5.0 deploy
+
+1. **Build overwrote the running image tag.** `docker compose build smcity-agent-blue` rebuilt `smcity:0.5.0` in place. If the new build had a runtime issue (crash on start, missing env var, etc.), there was no prior tag to roll back to — the only "previous version" lived inside the running containers, and the moment compose recreated them it pulled the broken image.
+2. **Both replicas shared a single image tag.** Blue and green both said `image: smcity:0.5.0`. There was no way to put one replica on the new tag and keep the other on the prior tag during the roll — the layering the architecture promised didn't actually exist in the YAML.
+3. **No HTTP-level sanity check.** Docker's healthcheck just hit `/health` inside the container; the deploy proceeded as soon as that flipped to "healthy". A container with the wrong network bind (e.g., bound to `127.0.0.1` instead of `0.0.0.0`) would pass its own healthcheck but be unreachable from the nginx router.
+
+### Files changed
+
+- `deploy/docker-compose.yml` — image tags parameterised via `BLUE_TAG` and `GREEN_TAG` env vars (both default to the current shipping tag). The two replicas can now be on different tags during a roll without a YAML edit; the deploy script flips one at a time. Default values are kept inline so a bare `docker compose up -d` still works the same as before.
+- `deploy/deploy.sh` — rewritten end-to-end:
+  - Builds the **new** tag (default: the version in `pyproject.toml`). The prior tag stays intact on disk for fast rollback.
+  - Per-replica roll: blue first with `BLUE_TAG=<new>`, green continues serving 100% of traffic via nginx `proxy_next_upstream`. Then green with `GREEN_TAG=<new>`, blue serves 100%.
+  - Two health gates per replica: (a) Docker healthcheck flipping to `healthy`, (b) HTTP `/health` probe from inside the bridge network (catches "container is up but bound to the wrong address" failures).
+  - On any failure (build error, health timeout, HTTP probe miss), the failing replica is auto-rolled-back to its prior tag and the script exits non-zero. The other replica is never touched on failure.
+  - New `--status` flag dumps current blue/green tags + Docker-health side-by-side.
+  - New `--rollback <tag>` flag for manual revert of both replicas (no rebuild).
+  - New exit codes (build / health / HTTP / rollback) so wrapping CI can distinguish failure modes.
+
+### Worked through the failure modes
+
+- *Build fails*: neither replica is touched. Old service stays up. Exit 1.
+- *Build succeeds, blue's healthcheck never flips*: blue auto-rolls-back to prior tag; green still on prior tag; nginx serves from green throughout. Exit 2.
+- *Build succeeds, blue is Docker-healthy but the HTTP probe fails*: blue auto-rolls-back; same as above. Exit 3.
+- *Blue rolls cleanly, green's healthcheck never flips*: green auto-rolls-back to prior tag; blue stays on the new tag; nginx serves from blue throughout. The deploy is half-done but the live service is still up — `./deploy.sh --status` will show the asymmetry so the operator can debug or `--rollback` blue. Exit 2.
+- *Rollback itself fails*: explicit exit 4 with manual-fix command printed. Surfaces the rare double-failure case loudly instead of silently leaving a broken replica.
+
+### Why this is in its own commit
+
+The deploy hardening is unrelated to runtime behaviour and could regress separately from the agent code; bundling it with the v0.5.5 fixes would muddle bisects when something fails. The `--status` and `--rollback` flags are observability + safety additions that pay back the first time a deploy gets nervy.
+
+No agent runtime code changed. 338 tests still pass. Ruff + mypy strict clean.
+
 ## [0.5.5] — 2026-05-25
 
 **Live-smoke driven fixes** — first run of `scripts/live_smoke.py` against the real Mac-Studio LM Studio exposed two systematic gpt-oss-120b argument-shape bugs that the unit-test suite couldn't surface. Both fixed structurally at the schema layer.
