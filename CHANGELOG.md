@@ -2,6 +2,49 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.5.5] — 2026-05-25
+
+**Live-smoke driven fixes** — first run of `scripts/live_smoke.py` against the real Mac-Studio LM Studio exposed two systematic gpt-oss-120b argument-shape bugs that the unit-test suite couldn't surface. Both fixed structurally at the schema layer.
+
+### Live smoke result
+
+| Query                                        | Before (v0.5.4)                   | After (v0.5.5)                    |
+|----------------------------------------------|-----------------------------------|-----------------------------------|
+| `next train at Central` (en)                 | ❌ validation: `name` vs `station_name` | ✅ MTR ETAs returned              |
+| `where's the nearest 7-eleven near TST?` (en)| ❌ LLM bypassed `address_lookup`  | ✅ chain rule fired → 7-Eleven   |
+| `尖沙咀附近邊度有牙醫?` (yue)                  | ✅ chain rule fired               | ✅ chain rule fired               |
+| `how do I get from Central to Sha Tin?` (en) | ✅ picked `plan_journey` (DEFAULT)| ✅ picked `plan_journey`          |
+| `MTR from Central to Sha Tin` (en)           | ✅ picked `plan_simple_route` (SPECIALIZED) | ✅ picked `plan_simple_route` |
+| `find me a place to go` (en)                 | ✅ gate fired                     | ✅ gate fired                     |
+
+All three v0.5.1 engines now confirmed firing against the real LLM: `chain.fired` on POI queries (EN + yue, deterministic `auto_dispatch` kind), `gate.violated` on vague `ask_user`-only proposals. Latency 3.5 – 9.8 s per query.
+
+### What was wrong
+
+**Bug 1: field-name guess (`name` vs canonical).** gpt-oss-120b consistently emits `{"name": "Central"}` when the schema declares the field as `station_name`, and the same for `query` on lookup tools. The validation error fires before any handler runs (`status=error`, `latency_ms=0`, `error_kind=validation`), so the orchestrator never gets a chance to retry. Three tools affected: `transport.get_mtr_next_trains` (`station_name`), `geo.address_lookup` (`query`), `transport.find_stops_by_name` (`query`).
+
+**Bug 2: POI null-coords bypass.** The `geo.find_*` tools declared `lat: float | None = None` and `lng: float | None = None` with no spatial-scope constraint. When the LLM skipped `geo.address_lookup` and called `geo.find_convenience_store` directly with `{"lat": null, "lng": null}`, the schema accepted it, the handler defaulted to the whole-of-HK bbox, the search returned a noisy global result, and the synthesis collapsed into harmony noise. The chain-rules engine couldn't help — its precondition (an `ok` `address_lookup` result) never fired.
+
+### Fixes (both structural, at the schema layer)
+
+- `smcity/tools/transport.py` — `MTRNextTrainsArgs.station_name` now declares `validation_alias=AliasChoices("station_name", "name", "station")` + `model_config = ConfigDict(populate_by_name=True)`. The LLM's `name` guess is accepted as a synonym; the canonical `station_name` still works.
+- `smcity/tools/geo.py` — same treatment for `AddressLookupArgs.query` (`AliasChoices("query", "name", "q")`).
+- `smcity/tools/transport_search.py` — same for `FindStopsByNameArgs.query` (`AliasChoices("query", "name", "stop_name", "q")`).
+- `smcity/tools/osm_pois.py` — new `@model_validator(mode="after")` on `FindPoiArgs` rejecting the (no point AND no full bbox) shape with a message that tells the LLM exactly what to do: *"Call geo.address_lookup first to resolve a place name to coordinates."* The chain-rules engine then auto-completes the chain in the common case.
+
+### What this does NOT do (per memory: "three similar lines is better than premature abstraction")
+
+We did **not** build a universal registry-layer auto-remapping mechanism. With three tools exhibiting the same pattern, per-tool aliases are the right scope: explicit, debuggable, no magic. If a fourth tool shows the same vulnerability AND the pattern stays uniform (one unexpected `name` field, one missing canonical), the universal mechanism becomes warranted; until then, evidence-driven inline fixes are the right call.
+
+### Tests
+
+- `tests/test_osm_gmb_forecast.py::test_osm_pois_dedupes_by_osm_id` — updated to pass an explicit `(lat, lng)` after the new validator. Test still covers dedup logic; the v0.5.5 spatial-scope guard is now exercised by the dispatch path the test goes through.
+- 338 tests pass. Ruff (lint + format) clean. Mypy strict clean across all 39 source files.
+
+### Operational note: SSH-driven LM Studio remote ops
+
+Bringing LM Studio up tonight surfaced that the lab Mac Studio is fully SSH-accessible via Tailscale (`ssh earnestdesign@earnests-mac-studio.taila366aa.ts.net`). We used that to (a) confirm the LM Studio process state, (b) flip the server bind from `127.0.0.1:1234` to `0.0.0.0:1234` remotely via `lms server start --bind 0.0.0.0`. Captured in [memory/reference_tailscale_ssh.md](../../.claude/projects/-Users-huckgod-Developer-LabSocialRobotics-SmartCityIntegration/memory/reference_tailscale_ssh.md) so we don't ask the user to bounce machines for ops we can do remotely.
+
 ## [0.5.4] — 2026-05-24
 
 **README refresh** — surgical patch. No code change. The repo's `README.md` was dated v0.4.5 (2026-04-23) and predated the v0.5.0 → v0.5.3 work; a new contributor or returning maintainer landing on the README would miss the entire v0.5.x story.

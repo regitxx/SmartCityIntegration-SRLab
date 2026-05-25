@@ -9,7 +9,7 @@ exact schema we extract.
 from __future__ import annotations
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
 
@@ -17,7 +17,16 @@ ALS_URL = "https://www.als.gov.hk/lookup"
 
 
 class AddressLookupArgs(BaseModel):
-    query: str = Field(min_length=1, max_length=200, description="free-text address or place in HK")
+    # gpt-oss-120b consistently emits `name` for "thing to look up" fields
+    # (observed in v0.5.4 live smoke). Accept it as an alias for `query`.
+    model_config = ConfigDict(populate_by_name=True)
+
+    query: str = Field(
+        min_length=1,
+        max_length=200,
+        validation_alias=AliasChoices("query", "name", "q"),
+        description="free-text address or place in HK",
+    )
     max_results: int = Field(default=5, ge=1, le=20)
 
 

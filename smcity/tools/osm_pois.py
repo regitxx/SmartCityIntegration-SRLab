@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
 
@@ -126,6 +126,29 @@ class FindPoiArgs(BaseModel):
     min_lng: float | None = Field(default=None, description="Optional bbox — SW corner lng.")
     max_lat: float | None = Field(default=None, description="Optional bbox — NE corner lat.")
     max_lng: float | None = Field(default=None, description="Optional bbox — NE corner lng.")
+
+    @model_validator(mode="after")
+    def _require_spatial_scope(self) -> FindPoiArgs:
+        # Reject the "search all of HK" shape that gpt-oss-120b emits when it
+        # skips `geo.address_lookup` and passes null lat/lng with no bbox
+        # (observed in v0.5.4 live smoke). Forces the LLM to either provide a
+        # point or an explicit bbox; either path is structurally correct.
+        # The chain_rules engine then auto-completes address_lookup -> find_X
+        # in the common case.
+        has_point = self.lat is not None and self.lng is not None
+        has_full_bbox = (
+            self.min_lat is not None
+            and self.min_lng is not None
+            and self.max_lat is not None
+            and self.max_lng is not None
+        )
+        if not has_point and not has_full_bbox:
+            raise ValueError(
+                "either (lat AND lng) or a full bbox (min_lat, min_lng, "
+                "max_lat, max_lng) must be provided. Call geo.address_lookup "
+                "first to resolve a place name to coordinates."
+            )
+        return self
 
 
 class OsmPoi(BaseModel):

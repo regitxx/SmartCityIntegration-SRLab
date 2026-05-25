@@ -14,7 +14,7 @@ from functools import cache
 from pathlib import Path
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from rapidfuzz import fuzz, process
 
 from smcity.tools.registry import ToolContext, ToolScope, ToolSpec, ToolUpstreamError
@@ -76,8 +76,13 @@ def resolve_mtr_station(name: str) -> MTRStation | None:
 
 
 class MTRNextTrainsArgs(BaseModel):
+    # gpt-oss-120b consistently emits `name` instead of `station_name` for
+    # this tool (observed in v0.5.4 live smoke). Accept both via alias.
+    model_config = ConfigDict(populate_by_name=True)
+
     station_name: str = Field(
         min_length=1,
+        validation_alias=AliasChoices("station_name", "name", "station"),
         description="Name of the MTR station (EN / 繁體 / 简体). Fuzzy matched.",
     )
     # Optional line hint — helps when a station is on multiple lines (e.g. Admiralty).

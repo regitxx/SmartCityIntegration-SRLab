@@ -8,7 +8,7 @@ Citybus is excluded from the proximity index for now (no list-all-stops API).
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from rapidfuzz import fuzz, process
 
 from smcity.geometry import haversine_km as _haversine_km
@@ -246,7 +246,15 @@ FIND_STOPS_NEAR_POINT_TOOL: ToolSpec[FindStopsNearPointArgs, FindStopsNearPointR
 
 
 class FindStopsByNameArgs(BaseModel):
-    query: str = Field(min_length=1, max_length=120)
+    # gpt-oss-120b emits `name` for "thing to look up" fields (v0.5.4 live
+    # smoke). Accept it as an alias for `query` so the LLM's guess matches.
+    model_config = ConfigDict(populate_by_name=True)
+
+    query: str = Field(
+        min_length=1,
+        max_length=120,
+        validation_alias=AliasChoices("query", "name", "stop_name", "q"),
+    )
     operators: list[str] = Field(default_factory=lambda: ["kmb", "mtr"])
     max_results: int = Field(default=8, ge=1, le=30)
 

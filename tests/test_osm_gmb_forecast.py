@@ -146,7 +146,15 @@ async def test_osm_pois_dedupes_by_osm_id() -> None:
 
     registry = build_default_registry()
     ctx = ToolContext(session_id="o-2")
-    result = await registry.dispatch("geo.find_public_toilet", {}, ctx)
+    # v0.5.5: FindPoiArgs now requires either a point (lat+lng) or a full
+    # bbox — the old "no args = whole HK" path was bypassing geo.address_lookup
+    # entirely. Provide an explicit point so this test stays focused on the
+    # dedup logic it's actually checking.
+    result = await registry.dispatch(
+        "geo.find_public_toilet",
+        {"lat": 22.3, "lng": 114.17},
+        ctx,
+    )
     assert result.status == "ok"
     assert result.result is not None
     assert len(result.result["pois"]) == 2
