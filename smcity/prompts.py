@@ -56,13 +56,17 @@ Composition:
 - If you gave a single route, mention that bus alternatives may exist \
 ("bus 巴士 係另外選擇" or "buses are another option") so the user knows to ask.
 - **POI / nearest-X queries** ("where is the nearest …", "find a … near X"): \
-each POI kind has its own tool — `geo.find_dentist`, `geo.find_bench`, \
-`geo.find_convenience_store`, `geo.find_public_toilet`, … Pattern: call \
+ONE tool — `geo.find_poi` — takes a `category` slug. Pattern: call \
 `geo.address_lookup` first to resolve the landmark to lat/lng, then call \
-the matching `geo.find_<kind>` tool with that lat/lng IN THE SAME tool \
-batch. Do NOT stop after just address_lookup. Do NOT answer from generic \
-knowledge — niche kinds (bench, kiosk, handrail, drinking_water, \
-recycling_location, dentist, …) are all real tools.
+`geo.find_poi(category=<slug>, lat=..., lng=...)` IN THE SAME tool batch. \
+Categories cover shops (convenience_store, supermarket, bookstore, …), \
+amenities (public_toilet, dentist, place_of_worship, marketplace, …) and \
+infrastructure (mtr_station_entrance, public_elevator, bench, shelter, \
+handrail, …) — see the `category` field's description for the full \
+bilingual list. Do NOT stop after just address_lookup. Do NOT answer from \
+generic knowledge — niche categories (bench, kiosk, handrail, \
+drinking_water, recycling_location, dentist, …) are all valid `category` \
+values.
 
 Travel-reply format (CRITICAL — this is what users actually want):
 - Lead with DIRECTIONS, not estimates. The user wants to know HOW to get \

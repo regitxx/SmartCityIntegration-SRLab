@@ -61,7 +61,7 @@ def test_engine_returns_none_when_successor_already_fired() -> None:
     """If the chain already completed, we mustn't re-fire."""
     results = [
         _ok("geo.address_lookup", _address_lookup_result()),
-        _ok("geo.find_bench", {"pois": []}),
+        _ok("geo.find_poi", {"category": "bench", "pois": []}),
     ]
     assert apply_chain_rules("nearest bench near TST?", results) is None
 
@@ -116,7 +116,8 @@ def test_poi_rule_auto_dispatches_when_category_inferrable() -> None:
     rule, continuation = match
     assert rule is POI_CHAIN_RULE
     assert isinstance(continuation, AutoDispatch)
-    assert continuation.tool == "geo.find_bench"
+    assert continuation.tool == "geo.find_poi"
+    assert continuation.args["category"] == "bench"
     assert continuation.args["lat"] == 22.30
     assert continuation.args["lng"] == 114.17
 
@@ -127,7 +128,8 @@ def test_poi_rule_dispatches_dentist_in_english() -> None:
     assert match is not None
     _, continuation = match
     assert isinstance(continuation, AutoDispatch)
-    assert continuation.tool == "geo.find_dentist"
+    assert continuation.tool == "geo.find_poi"
+    assert continuation.args["category"] == "dentist"
 
 
 def test_poi_rule_dispatches_dentist_in_traditional_chinese() -> None:
@@ -136,7 +138,8 @@ def test_poi_rule_dispatches_dentist_in_traditional_chinese() -> None:
     assert match is not None
     _, continuation = match
     assert isinstance(continuation, AutoDispatch)
-    assert continuation.tool == "geo.find_dentist"
+    assert continuation.tool == "geo.find_poi"
+    assert continuation.args["category"] == "dentist"
 
 
 def test_poi_rule_dispatches_dentist_in_simplified_chinese() -> None:
@@ -145,7 +148,8 @@ def test_poi_rule_dispatches_dentist_in_simplified_chinese() -> None:
     assert match is not None
     _, continuation = match
     assert isinstance(continuation, AutoDispatch)
-    assert continuation.tool == "geo.find_dentist"
+    assert continuation.tool == "geo.find_poi"
+    assert continuation.args["category"] == "dentist"
 
 
 def test_poi_rule_dispatches_convenience_store_for_brand_names() -> None:
@@ -156,7 +160,8 @@ def test_poi_rule_dispatches_convenience_store_for_brand_names() -> None:
         assert match is not None, query
         _, continuation = match
         assert isinstance(continuation, AutoDispatch)
-        assert continuation.tool == "geo.find_convenience_store", query
+        assert continuation.tool == "geo.find_poi", query
+        assert continuation.args["category"] == "convenience_store", query
 
 
 def test_poi_rule_dispatches_toilet_across_synonyms() -> None:
@@ -166,7 +171,8 @@ def test_poi_rule_dispatches_toilet_across_synonyms() -> None:
         assert match is not None, query
         _, continuation = match
         assert isinstance(continuation, AutoDispatch)
-        assert continuation.tool == "geo.find_public_toilet", query
+        assert continuation.tool == "geo.find_poi", query
+        assert continuation.args["category"] == "public_toilet", query
 
 
 # --- POI rule: LLMHint fallback ------------------------------------------

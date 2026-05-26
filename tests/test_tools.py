@@ -159,3 +159,62 @@ async def test_ask_user_tool_round_trips_question() -> None:
     assert result.result is not None
     assert result.result["slot"] == "mode"
     assert "MTR" in result.result["question"]
+
+
+# --- v0.6.0 POI collapse: regression guards -------------------------------
+
+
+def test_registry_exposes_collapsed_find_poi_only() -> None:
+    """v0.6.0 collapsed the 30 per-category POI tools into one geo.find_poi.
+    Registry must expose the new tool and NOT the old per-slug names."""
+    registry = build_default_registry()
+    names = set(registry.names())
+    assert "geo.find_poi" in names
+    legacy = {f"geo.find_{slug}" for slug in (
+        "dentist",
+        "convenience_store",
+        "public_toilet",
+        "bench",
+        "mtr_station_entrance",
+    )}
+    assert not (legacy & names), f"legacy POI tool names still registered: {legacy & names}"
+
+
+def test_find_poi_category_literal_rejects_unknown_slug() -> None:
+    """`category` is a Literal — pydantic must reject any slug that isn't in
+    the enum. Keeps the LLM from inventing categories that would blow up
+    in Overpass query construction."""
+    from pydantic import ValidationError
+
+    from smcity.tools.osm_pois import FindPoiArgs
+
+    with pytest.raises(ValidationError):
+        FindPoiArgs.model_validate(
+            {"category": "fictional_category", "lat": 22.3, "lng": 114.17}
+        )
+
+
+def test_find_poi_category_required() -> None:
+    """`category` has no default — pydantic must reject a missing one."""
+    from pydantic import ValidationError
+
+    from smcity.tools.osm_pois import FindPoiArgs
+
+    with pytest.raises(ValidationError):
+        FindPoiArgs.model_validate({"lat": 22.3, "lng": 114.17})
+
+
+def test_registry_schema_size_is_bounded() -> None:
+    """v0.6.0 collapse must keep the total OpenAI-schema blob under 30 KB.
+    Pre-collapse it was ~66 KB (mostly 30 POI tools duplicating FindPoiArgs).
+    A regression here likely means a new tool with a giant args schema —
+    fix at the source rather than raising the cap."""
+    import json as _json
+
+    registry = build_default_registry()
+    blob = _json.dumps(registry.openai_schemas(), ensure_ascii=False)
+    assert len(blob) < 30_000, (
+        f"tool schema blob is {len(blob)} chars; v0.6.0 budget is 30K. "
+        "If you intentionally added a large tool, raise the cap and update "
+        "this comment with the new ceiling."
+    )

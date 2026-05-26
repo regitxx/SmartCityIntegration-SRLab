@@ -300,14 +300,15 @@ families of search tools the LLM should have tried.
 
 A chain rule asks: "given the tools we just ran successfully, is there
 a follow-up we expected but didn't see?" For POI queries, the canonical
-chain is `geo.address_lookup` → `geo.find_<category>`. When the LLM
-fires the first but not the second, the rule produces a `Continuation`:
+chain is `geo.address_lookup` → `geo.find_poi(category=...)`. When the
+LLM fires the first but not the second, the rule produces a
+`Continuation`:
 
 - `AutoDispatch(tool, args)` when the missing tool + args can be
   inferred unambiguously from the user's text (POI category inference
   uses 30 multilingual keyword patterns across EN / yue / zh-Hant /
-  zh-Hans). The orchestrator dispatches deterministically — no LLM
-  re-roll.
+  zh-Hans, picked from the `geo.find_poi` `category` enum). The
+  orchestrator dispatches deterministically — no LLM re-roll.
 - `LLMHint(text)` when inference is ambiguous (multiple plausible
   successors). The orchestrator appends the hint as a system message
   and re-prompts; this is the fallback equivalent of the old v0.5.0

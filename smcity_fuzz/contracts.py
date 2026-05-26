@@ -35,7 +35,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from smcity.tools.osm_pois import POI_TOOL_NAME
+from smcity.tools.osm_pois import POI_CATEGORIES, POI_TOOL
 
 # --- public types ---------------------------------------------------------
 
@@ -133,40 +133,66 @@ def _reply_has_numeric_signal(reply: str) -> bool:
 # --- contract factories ---------------------------------------------------
 
 
-def _poi_chain_contract(poi_tool: str) -> ContractFn:
-    """Success = the per-category POI tool fired AND the reply has POI data.
+def _poi_chain_contract(expected_category: str) -> ContractFn:
+    """Success = `geo.find_poi` fired with `category=<expected_category>`
+    AND the reply has POI data.
 
-    A bare `geo.address_lookup` (without the POI tool) buckets as
-    `partial_chain`. A POI tool firing but the reply has no POI data also
-    `partial_chain` — usually means Overpass returned 0 rows.
+    Bucketing:
+    - `geo.find_poi(category=expected)` ok + reply has data → complete
+    - same tool fired with the WRONG category → wrong_tool (right family,
+      wrong slug — the v0.5 collapse-era equivalent of firing the wrong
+      `geo.find_*` tool)
+    - geo.find_poi attempted but errored → partial_chain
+    - only geo.address_lookup fired → partial_chain
+    - some unrelated tool fired → wrong_tool
+    - nothing fired → no_tool
     """
 
     def check(row: dict[str, Any]) -> Verdict:
         fired_ok = _ok_tool_names(row)
         fired_all = _fired_tool_names(row)
         reply = (row.get("reply_text") or "").strip()
+        # Find the category arg on any geo.find_poi entry in the trace.
+        poi_categories: list[str] = []
+        for entry in row.get("tool_trace") or []:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("name") != POI_TOOL:
+                continue
+            args = entry.get("args") or {}
+            cat = args.get("category") if isinstance(args, dict) else None
+            if isinstance(cat, str):
+                poi_categories.append(cat)
 
-        if poi_tool in fired_ok:
+        if POI_TOOL in fired_ok and expected_category in poi_categories:
             if _reply_has_poi_data(reply):
-                return Verdict("complete", f"{poi_tool} fired, reply has POI data")
-            return Verdict("partial_chain", f"{poi_tool} fired but reply lacks POI data")
+                return Verdict(
+                    "complete",
+                    f"{POI_TOOL}(category={expected_category!r}) fired, reply has POI data",
+                )
+            return Verdict(
+                "partial_chain",
+                f"{POI_TOOL}(category={expected_category!r}) fired but reply lacks POI data",
+            )
 
-        if poi_tool in fired_all:
-            # POI tool was attempted but errored. Treat as partial — the
-            # agent had the right intent.
-            return Verdict("partial_chain", f"{poi_tool} attempted but did not return ok")
+        if POI_TOOL in fired_ok and poi_categories:
+            # Right tool, wrong category — the v0.6.0 equivalent of firing
+            # `geo.find_bench` for a dentist question. Surface as wrong_tool.
+            return Verdict(
+                "wrong_tool",
+                f"{POI_TOOL} fired with category={poi_categories!r} instead of "
+                f"{expected_category!r}",
+            )
+
+        if POI_TOOL in fired_all:
+            return Verdict("partial_chain", f"{POI_TOOL} attempted but did not return ok")
 
         if "geo.address_lookup" in fired_all:
-            return Verdict("partial_chain", "address_lookup ran but POI tool was never called")
+            return Verdict("partial_chain", "address_lookup ran but geo.find_poi was never called")
 
         # Wrong-tool vs no-tool.
         if not fired_all:
             return Verdict("no_tool", "no tools fired — agent answered from general knowledge")
-
-        # Any OTHER geo.find_* tool — wrong category but right family.
-        other_poi = [f for f in fired_all if f.startswith("geo.find_")]
-        if other_poi:
-            return Verdict("wrong_tool", f"fired {other_poi} instead of {poi_tool}")
 
         return Verdict("wrong_tool", f"fired {fired_all} on POI question")
 
@@ -386,7 +412,11 @@ _CATALOG_OSM_CATEGORY_BY_ID: dict[str, str] = {
     "S549": "handrail",
 }
 for _ds_id, _osm_cat in _CATALOG_OSM_CATEGORY_BY_ID.items():
-    CONTRACTS[_ds_id] = _poi_chain_contract(POI_TOOL_NAME[_osm_cat])
+    if _osm_cat not in POI_CATEGORIES:  # pragma: no cover — startup invariant
+        raise RuntimeError(
+            f"fuzz catalog references unknown POI category {_osm_cat!r} for {_ds_id}"
+        )
+    CONTRACTS[_ds_id] = _poi_chain_contract(_osm_cat)
 
 
 # --- public entry point ---------------------------------------------------

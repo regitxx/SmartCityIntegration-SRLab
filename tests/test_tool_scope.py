@@ -127,12 +127,22 @@ def test_default_registry_marks_ask_user_as_fallback() -> None:
 
 
 def test_default_registry_leaves_untagged_tools_unmarked() -> None:
-    """Tools we haven't tagged yet (e.g. POI find_*, weather, facility) should
-    render without a marker — preserves the current behavior for un-audited
-    domains until we have a reason to tag them."""
+    """Tools we haven't tagged yet (e.g. weather, facility) should render
+    without a marker — preserves the current behavior for un-audited domains
+    until we have a reason to tag them."""
     registry = build_default_registry()
-    spec = registry.get("geo.find_dentist")
+    spec = registry.get("context.get_current_weather")
     assert spec.scope == ToolScope.DEFAULT
     assert spec.domain is None
     desc = spec.openai_schema()["function"]["description"]
     assert not desc.startswith("[")
+
+
+def test_default_registry_marks_find_poi_with_osm_poi_domain() -> None:
+    """The collapsed geo.find_poi tool advertises its scope so the LLM sees
+    `[DEFAULT: osm_poi]` and treats it as the go-to for OSM POI queries."""
+    registry = build_default_registry()
+    spec = registry.get("geo.find_poi")
+    assert spec.scope == ToolScope.DEFAULT
+    assert spec.domain == "osm_poi"
+    assert spec.openai_schema()["function"]["description"].startswith("[DEFAULT: osm_poi]")

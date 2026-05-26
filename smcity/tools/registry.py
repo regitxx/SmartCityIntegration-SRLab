@@ -102,6 +102,11 @@ class ToolSpec(Generic[ArgsT, ResultT]):  # noqa: UP046  # PEP 695 + dataclass h
     # "kmb_lwb_bus_only") that groups tools that compete for the same query.
     scope: ToolScope = ToolScope.DEFAULT
     domain: str | None = None
+    # When set, the orchestrator pulls `result[<key>]` and attaches it to the
+    # tool's Citation as a discriminator. Used for tools that handle multiple
+    # sub-types behind one name (e.g. geo.find_poi over 30 categories) so the
+    # user-facing `src: ...` footer can still show the sub-type.
+    citation_discriminator_key: str | None = None
 
     def _scope_prefix(self) -> str:
         """Render the `[DEFAULT: …]` / `[SPECIALIZED: …]` / `[FALLBACK]` tag.

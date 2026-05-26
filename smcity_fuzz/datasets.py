@@ -136,50 +136,71 @@ TOPICS: tuple[DatasetTopic, ...] = (
         id="public_toilets",
         title_en="Public toilets",
         title_tc="公廁",
-        expected_tools=("geo.find_public_toilet",),
-        description_en="Nearest public toilets — a common 'I need this now' query.",
+        expected_tools=("geo.find_poi",),
+        description_en=(
+            "Nearest public toilets — a common 'I need this now' query. "
+            "Agent should call geo.find_poi with category='public_toilet'."
+        ),
     ),
     DatasetTopic(
         id="convenience_stores",
         title_en="Convenience stores",
         title_tc="便利店",
-        expected_tools=("geo.find_convenience_store",),
-        description_en="7-Eleven, Circle K, Vango — anywhere, 24h.",
+        expected_tools=("geo.find_poi",),
+        description_en=(
+            "7-Eleven, Circle K, Vango — anywhere, 24h. Agent should call "
+            "geo.find_poi with category='convenience_store'."
+        ),
     ),
     DatasetTopic(
         id="places_of_worship",
         title_en="Places of worship",
         title_tc="宗教場所",
-        expected_tools=("geo.find_place_of_worship",),
-        description_en="Temples, churches, mosques, monasteries.",
+        expected_tools=("geo.find_poi",),
+        description_en=(
+            "Temples, churches, mosques, monasteries. Agent should call "
+            "geo.find_poi with category='place_of_worship'."
+        ),
     ),
     DatasetTopic(
         id="mtr_station_entrances",
         title_en="MTR station entrances",
         title_tc="港鐵站出入口",
-        expected_tools=("geo.find_mtr_station_entrance",),
-        description_en="Specific lettered entrance (A1, B, D) — useful for meetups.",
+        expected_tools=("geo.find_poi",),
+        description_en=(
+            "Specific lettered entrance (A1, B, D) — useful for meetups. "
+            "Agent should call geo.find_poi with category='mtr_station_entrance'."
+        ),
     ),
     DatasetTopic(
         id="drinking_water",
         title_en="Drinking water fountains",
         title_tc="飲水機",
-        expected_tools=("geo.find_drinking_water",),
-        description_en="Free refill spots, parks, sports grounds.",
+        expected_tools=("geo.find_poi",),
+        description_en=(
+            "Free refill spots, parks, sports grounds. Agent should call "
+            "geo.find_poi with category='drinking_water'."
+        ),
     ),
     DatasetTopic(
         id="benches_shelters",
         title_en="Benches + shelters",
         title_tc="座椅同避雨亭",
-        expected_tools=("geo.find_bench", "geo.find_shelter"),
-        description_en="Rest / shade for elderly walkers or hikers.",
+        expected_tools=("geo.find_poi",),
+        description_en=(
+            "Rest / shade for elderly walkers or hikers. Agent should call "
+            "geo.find_poi with category='bench' or category='shelter'."
+        ),
     ),
     DatasetTopic(
         id="dentists",
         title_en="Dentists",
         title_tc="牙醫",
-        expected_tools=("geo.find_dentist",),
-        description_en="Private dental clinics — useful for urgent pain.",
+        expected_tools=("geo.find_poi",),
+        description_en=(
+            "Private dental clinics — useful for urgent pain. Agent should "
+            "call geo.find_poi with category='dentist'."
+        ),
     ),
     # --- Geocoding --------------------------------------------------------
     DatasetTopic(

@@ -31,7 +31,7 @@ from smcity.chain_rules import (
 )
 from smcity.classifier import classify
 from smcity.langrouter import DATASET_COVERAGE, LangDetection, choose_query_lang, detect
-from smcity.llm import LLMError, chat, chat_stream
+from smcity.llm import LLMError, LLMReply, chat, chat_stream
 from smcity.observability import get_tracer, set_attr_safe
 from smcity.prompts import (
     SYSTEM_PROMPT,
@@ -50,7 +50,7 @@ from smcity.schemas import (
 from smcity.session import SessionStore, redact_pii
 from smcity.slots import Locale, SessionSlots
 from smcity.synthesis_invariants import apply_invariants
-from smcity.tool_call_gates import apply_gates
+from smcity.tool_call_gates import GateViolation, apply_gates
 from smcity.tools import ToolRegistry, build_default_registry
 from smcity.tools.registry import ToolContext, ToolResult
 
@@ -257,9 +257,15 @@ class Orchestrator:
         # Declarative checks in smcity/tool_call_gates.py reject obviously
         # bad tool-call proposals (e.g., leading with meta.ask_user when no
         # search has been tried). On a violation, re-prompt the LLM once
-        # with the corrective hint and use the retry's tool calls. If the
-        # retry persists with the bad shape, we accept it — single retry,
-        # no loops.
+        # with the corrective hint and use the retry's tool calls.
+        #
+        # If the retry STILL violates the same gate (gpt-oss-120b on
+        # Cantonese POI queries occasionally ignores the corrective hint
+        # and re-emits the same bare-find_poi shape), we escalate to
+        # deterministic rectification — substituting a known-good shape
+        # for the bad one. Currently only `missing_spatial_scope` has a
+        # rectification path; other gate kinds fall through and accept
+        # whatever the retry produced.
         if first.tool_calls:
             gate_violation = apply_gates(first.tool_calls)
             if gate_violation is not None:
@@ -299,6 +305,33 @@ class Orchestrator:
                 except LLMError:
                     retry = None
                 if retry is not None and retry.tool_calls:
+                    # Re-check the gate. If the retry STILL violates the
+                    # same gate, apply deterministic rectification (when we
+                    # have a rectification path for this gate kind).
+                    retry_violation = apply_gates(retry.tool_calls)
+                    if (
+                        retry_violation is not None
+                        and retry_violation.kind == gate_violation.kind
+                    ):
+                        rectified = _rectify(
+                            retry_violation, retry.tool_calls, safe_text
+                        )
+                        if rectified is not None:
+                            _emit(
+                                TurnEvent(
+                                    type="gate.rectified",
+                                    data={
+                                        "name": retry_violation.name,
+                                        "kind": retry_violation.kind,
+                                    },
+                                )
+                            )
+                            retry = LLMReply(
+                                text=retry.text,
+                                tool_calls=rectified,
+                                usage=retry.usage,
+                                elapsed_ms=retry.elapsed_ms,
+                            )
                     first = retry
 
         if first.tool_calls:
@@ -741,6 +774,11 @@ class Orchestrator:
             )
             if res.status == "ok":
                 spec = self._registry.get(res.name)
+                discriminator: str | None = None
+                if spec.citation_discriminator_key and isinstance(res.result, dict):
+                    candidate = res.result.get(spec.citation_discriminator_key)
+                    if isinstance(candidate, str) and candidate:
+                        discriminator = candidate
                 citations.append(
                     Citation(
                         tool=res.name,
@@ -748,6 +786,7 @@ class Orchestrator:
                         fetched_at=datetime.now(UTC),
                         upstream_langs=sorted(spec.upstream_langs),
                         translation_applied=_translation_flag(res.name, detection),
+                        discriminator=discriminator,
                     )
                 )
 
@@ -823,8 +862,14 @@ def _rewrite_source_footer(text: str, citations: list[Citation]) -> str:
     cleaned = _SRC_LINE_RE.sub("", text).rstrip()
     if not citations:
         return cleaned
-    # "transport.plan_simple_route" → "plan_simple_route"
-    short = [c.tool.split(".", 1)[-1] for c in citations]
+    # "transport.plan_simple_route" → "plan_simple_route"; for tools that
+    # carry a discriminator (geo.find_poi), append it so the footer keeps
+    # the user-facing specificity (find_poi/dentist) it had before v0.6.0
+    # collapsed the per-category POI tools.
+    short: list[str] = []
+    for c in citations:
+        base = c.tool.split(".", 1)[-1]
+        short.append(f"{base}/{c.discriminator}" if c.discriminator else base)
     seen: set[str] = set()
     dedup: list[str] = []
     for name in short:
@@ -838,6 +883,37 @@ def _rewrite_source_footer(text: str, citations: list[Citation]) -> str:
 def _localise_chitchat(canned: str, d: LangDetection) -> str:
     # Chitchat table returns a reply-per-language already; no extra logic needed.
     return canned
+
+
+def _rectify(
+    violation: GateViolation,
+    proposed_calls: list[dict[str, Any]],
+    user_text: str,
+) -> list[dict[str, Any]] | None:
+    """Build a deterministic substitute tool-call list for the given gate
+    violation, or None if the gate kind has no rectification path.
+
+    Currently implements one rectification:
+    - `missing_spatial_scope` — drop the bare `geo.find_poi` call, substitute
+      `geo.address_lookup(query=user_text)`. The chain_rules POI engine then
+      auto-dispatches `geo.find_poi(category=..., lat=..., lng=...)` once the
+      lookup resolves coords.
+    """
+    if violation.kind != "missing_spatial_scope":
+        return None
+    kept = [c for c in proposed_calls if c.get("name") != "geo.find_poi"]
+    # Preserve any sibling tools the LLM correctly proposed (e.g. context
+    # checks paralleled with the bad find_poi); add the lookup.
+    has_lookup = any(c.get("name") == "geo.address_lookup" for c in kept)
+    if not has_lookup:
+        kept.append(
+            {
+                "id": "rectify-address-lookup",
+                "name": "geo.address_lookup",
+                "arguments": json.dumps({"query": user_text}, ensure_ascii=False),
+            }
+        )
+    return kept
 
 
 def _detection_from_override(code: str, carried: LangDetection) -> LangDetection:

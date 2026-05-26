@@ -24,6 +24,7 @@ asking.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -107,8 +108,9 @@ def _ask_user_only_check(
             "returned ambiguous results. Try again: pick the most plausible "
             "search or lookup tool for the user's query and call it now "
             "(e.g., transport.plan_journey for 'how do I get from X to Y?', "
-            "geo.address_lookup for landmark queries, a geo.find_<category> "
-            "tool for nearest-X queries). The search tool's response — even "
+            "geo.address_lookup for landmark queries, geo.find_poi with a "
+            "`category` slug for nearest-X queries). The search tool's "
+            "response — even "
             "an empty list — is more useful than a clarifying question. "
             "Only fall back to meta.ask_user if no search tool fits."
         ),
@@ -121,6 +123,82 @@ ASK_USER_ONLY_GATE = ToolCallGate(
 )
 
 
+# --- find_poi_needs_spatial_scope gate ------------------------------------
+
+
+def _parse_args(call: dict[str, Any]) -> dict[str, Any]:
+    raw = call.get("arguments")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _find_poi_needs_spatial_scope_check(
+    proposed: list[dict[str, Any]],
+) -> GateViolation | None:
+    """Fire when `geo.find_poi` is proposed with no lat/lng or bbox AND no
+    sibling `geo.address_lookup` call exists in the batch.
+
+    Background: post-v0.6.0 collapse, gpt-oss-120b occasionally calls
+    `geo.find_poi(category=...)` directly on Cantonese POI queries, skipping
+    the `geo.address_lookup` precondition the chain_rules engine relies on.
+    The args validator then rejects (spatial scope is required) and the
+    chain rule can't fire (no precondition result). This gate catches that
+    shape pre-execution and re-prompts with a clear "address_lookup first"
+    hint, restoring the v0.5.x chain reliability without baking the rule
+    into a tool description that the LLM might ignore again.
+    """
+    poi_call = next(
+        (c for c in proposed if c.get("name") == "geo.find_poi"),
+        None,
+    )
+    if poi_call is None:
+        return None
+    args = _parse_args(poi_call)
+    has_point = args.get("lat") is not None and args.get("lng") is not None
+    has_full_bbox = all(
+        args.get(k) is not None for k in ("min_lat", "min_lng", "max_lat", "max_lng")
+    )
+    if has_point or has_full_bbox:
+        return None  # already has spatial scope — handler will run fine.
+    # Spatial scope missing. A sibling `geo.address_lookup` call would
+    # produce coords AFTER both calls run, but the dispatcher validates
+    # per-call before that, so the find_poi call would still fail.
+    #
+    # We have a `corrective_prompt` for the re-prompt path. Live smoke
+    # also showed gpt-oss-120b can keep producing the SAME bare-find_poi
+    # shape on the retry (especially for Cantonese POI queries). The
+    # orchestrator detects that case by `violation.kind == "missing_spatial_scope"`
+    # and substitutes the proposal with a deterministic `geo.address_lookup`
+    # call — see `smcity/orchestrator.py` `_rectify_missing_spatial_scope`.
+    # The chain_rules POI engine then auto-dispatches the matching find_poi
+    # once coords resolve.
+    return GateViolation(
+        name="find_poi_needs_spatial_scope",
+        kind="missing_spatial_scope",
+        corrective_prompt=(
+            "You proposed `geo.find_poi` without `lat`/`lng` or a full bbox. "
+            "That call will fail validation. Call `geo.address_lookup` FIRST "
+            "to resolve the landmark in the user's question to coordinates, "
+            "THEN call `geo.find_poi` with those `lat`/`lng` values and the "
+            "matching `category` slug. Both calls go in the SAME tool batch — "
+            "the orchestrator runs them in parallel and chains the results."
+        ),
+    )
+
+
+FIND_POI_NEEDS_SPATIAL_SCOPE_GATE = ToolCallGate(
+    name="find_poi_needs_spatial_scope",
+    check=_find_poi_needs_spatial_scope_check,
+)
+
+
 # --- registered gates -----------------------------------------------------
 #
 # Add new gates here. Order matters — earlier gates fire first when
@@ -128,12 +206,14 @@ ASK_USER_ONLY_GATE = ToolCallGate(
 
 DEFAULT_GATES: list[ToolCallGate] = [
     ASK_USER_ONLY_GATE,
+    FIND_POI_NEEDS_SPATIAL_SCOPE_GATE,
 ]
 
 
 __all__ = [
     "ASK_USER_ONLY_GATE",
     "DEFAULT_GATES",
+    "FIND_POI_NEEDS_SPATIAL_SCOPE_GATE",
     "GateViolation",
     "ToolCallGate",
     "apply_gates",

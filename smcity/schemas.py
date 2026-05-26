@@ -39,6 +39,11 @@ class Citation(BaseModel):
     fetched_at: datetime
     upstream_langs: list[str] = Field(default_factory=list)
     translation_applied: bool = False
+    # Optional sub-type within `tool` — e.g. for `geo.find_poi` this carries
+    # the category slug ("dentist", "convenience_store", …) so the footer
+    # can render `find_poi/dentist` instead of bare `find_poi`. None when
+    # the tool has no meaningful sub-type.
+    discriminator: str | None = None
 
 
 class ToolTraceEntry(BaseModel):

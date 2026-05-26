@@ -13,6 +13,7 @@ from typing import Any
 from smcity.tool_call_gates import (
     ASK_USER_ONLY_GATE,
     DEFAULT_GATES,
+    FIND_POI_NEEDS_SPATIAL_SCOPE_GATE,
     GateViolation,
     ToolCallGate,
     apply_gates,
@@ -86,7 +87,7 @@ def test_gate_fires_when_only_ask_user_proposed() -> None:
     # Corrective prompt names the alternative tools so the LLM knows what to try
     assert "transport.plan_journey" in violation.corrective_prompt
     assert "geo.address_lookup" in violation.corrective_prompt
-    assert "geo.find_" in violation.corrective_prompt
+    assert "geo.find_poi" in violation.corrective_prompt
 
 
 def test_gate_silent_when_ask_user_paired_with_search_tool() -> None:
@@ -98,7 +99,10 @@ def test_gate_silent_when_ask_user_paired_with_search_tool() -> None:
 def test_gate_silent_when_only_search_tool_proposed() -> None:
     """A legitimate search-only proposal should always pass."""
     assert apply_gates([_call("transport.plan_journey")]) is None
-    assert apply_gates([_call("geo.find_dentist")]) is None
+    assert (
+        apply_gates([_call("geo.find_poi", {"category": "dentist", "lat": 22.3, "lng": 114.17})])
+        is None
+    )
 
 
 def test_gate_silent_when_multiple_search_tools_proposed() -> None:
@@ -116,8 +120,66 @@ def test_gate_silent_when_forget_me_proposed() -> None:
     assert apply_gates([_call("meta.forget_me")]) is None
 
 
+# --- find_poi_needs_spatial_scope gate -----------------------------------
+
+
+def test_poi_spatial_gate_fires_on_bare_find_poi() -> None:
+    """find_poi without lat/lng AND no address_lookup sibling → corrective."""
+    violation = apply_gates([_call("geo.find_poi", {"category": "dentist"})])
+    assert isinstance(violation, GateViolation)
+    assert violation.name == "find_poi_needs_spatial_scope"
+    assert "address_lookup" in violation.corrective_prompt
+    assert "category" in violation.corrective_prompt
+
+
+def test_poi_spatial_gate_silent_when_lat_lng_present() -> None:
+    """find_poi with coords already has spatial scope — gate stays quiet."""
+    proposed = [_call("geo.find_poi", {"category": "dentist", "lat": 22.3, "lng": 114.17})]
+    assert apply_gates(proposed) is None
+
+
+def test_poi_spatial_gate_silent_when_full_bbox_present() -> None:
+    """Full bbox is also a valid spatial scope."""
+    proposed = [
+        _call(
+            "geo.find_poi",
+            {
+                "category": "dentist",
+                "min_lat": 22.3,
+                "min_lng": 114.17,
+                "max_lat": 22.31,
+                "max_lng": 114.18,
+            },
+        )
+    ]
+    assert apply_gates(proposed) is None
+
+
+def test_poi_spatial_gate_fires_even_with_lookup_sibling() -> None:
+    """Even with address_lookup in the same batch, find_poi without coords
+    will fail validation before the chain rule can splice them together.
+    The gate makes the LLM thread coords explicitly."""
+    proposed = [
+        _call("geo.address_lookup", {"query": "Tsim Sha Tsui"}),
+        _call("geo.find_poi", {"category": "dentist"}),
+    ]
+    violation = apply_gates(proposed)
+    assert isinstance(violation, GateViolation)
+    assert violation.name == "find_poi_needs_spatial_scope"
+
+
+def test_poi_spatial_gate_silent_when_find_poi_not_in_batch() -> None:
+    """No find_poi in the proposal → gate doesn't apply."""
+    proposed = [_call("transport.plan_journey")]
+    assert apply_gates(proposed) is None
+
+
 # --- DEFAULT_GATES sanity ------------------------------------------------
 
 
 def test_default_gates_contain_ask_user_only_gate() -> None:
     assert ASK_USER_ONLY_GATE in DEFAULT_GATES
+
+
+def test_default_gates_contain_find_poi_spatial_gate() -> None:
+    assert FIND_POI_NEEDS_SPATIAL_SCOPE_GATE in DEFAULT_GATES

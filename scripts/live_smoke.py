@@ -42,13 +42,13 @@ QUERIES: list[tuple[str, str, str | None, str]] = [
         "smoke-poi-en",
         "where's the nearest 7-eleven near Tsim Sha Tsui?",
         "en",
-        "chain_rules AutoDispatch (EN): address_lookup -> geo.find_convenience_store",
+        "chain_rules AutoDispatch (EN): address_lookup -> geo.find_poi(category=convenience_store)",
     ),
     (
         "smoke-poi-yue",
         "尖沙咀附近邊度有牙醫?",
         "yue",
-        "chain_rules AutoDispatch (yue): address_lookup -> geo.find_dentist",
+        "chain_rules AutoDispatch (yue): address_lookup -> geo.find_poi(category=dentist)",
     ),
     (
         "smoke-plan-default",

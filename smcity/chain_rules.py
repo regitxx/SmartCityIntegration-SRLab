@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from re import Pattern
 from typing import Any
 
-from smcity.tools.osm_pois import POI_TOOL_NAME, POI_TOOL_NAMES
+from smcity.tools.osm_pois import POI_TOOL, POI_TOOL_NAMES
 from smcity.tools.registry import ToolResult
 
 # --- continuation types ---------------------------------------------------
@@ -118,7 +118,7 @@ def apply_chain_rules(
 #
 # Shape regex catches the "is this a POI/nearest-X question?" sniff test.
 # Category regex catches "which OSM category did the user mean?" so we can
-# auto-dispatch the matching geo.find_<slug> tool.
+# auto-dispatch `geo.find_poi(category=...)` with that slug.
 #
 # The shape regex is intentionally generous — false positives cost one LLM
 # round-trip, false negatives skip the chain enforcement entirely.
@@ -276,8 +276,8 @@ def _poi_resolver(user_text: str, lookup: ToolResult) -> ChainContinuation | Non
 
     `lookup` is the successful `geo.address_lookup` result. We pull the first
     candidate's lat/lng and decide:
-    - If the user's text names a specific category → AutoDispatch the
-      matching geo.find_<slug> tool with those coords (deterministic).
+    - If the user's text names a specific category → AutoDispatch
+      `geo.find_poi(category=<slug>, lat=..., lng=...)` (deterministic).
     - Otherwise → LLMHint with the coords pre-quoted, so the LLM picks.
     """
     candidates = (lookup.result or {}).get("candidates") or []
@@ -293,8 +293,9 @@ def _poi_resolver(user_text: str, lookup: ToolResult) -> ChainContinuation | Non
     category = _infer_poi_category(user_text)
     if category is not None:
         return AutoDispatch(
-            tool=POI_TOOL_NAME[category],
+            tool=POI_TOOL,
             args={
+                "category": category,
                 "lat": float(lat),
                 "lng": float(lng),
                 "radius_m": 800,
@@ -304,10 +305,10 @@ def _poi_resolver(user_text: str, lookup: ToolResult) -> ChainContinuation | Non
     return LLMHint(
         text=(
             f"You called geo.address_lookup and got lat={lat}, lng={lng} "
-            f"({place}), but you did NOT call a geo.find_* POI tool. The user "
-            "asked a POI / 'where is the nearest …' question. Call the matching "
-            "geo.find_<category> tool NOW with those coordinates. Do not "
-            "synthesise a reply yet."
+            f"({place}), but you did NOT call `geo.find_poi`. The user asked "
+            "a POI / 'where is the nearest …' question. Call `geo.find_poi` "
+            "NOW with those coordinates and the matching `category` slug. "
+            "Do not synthesise a reply yet."
         )
     )
 

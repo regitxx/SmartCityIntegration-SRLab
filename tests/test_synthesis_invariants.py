@@ -40,7 +40,7 @@ def _det(lang: str = "en") -> LangDetection:
 
 
 def _poi_result(*names: str) -> dict:
-    """Build a geo.find_* result with the given POI names."""
+    """Build a geo.find_poi result with the given POI names."""
     return {
         "category": "dentist",
         "bbox_used": [22.30, 114.16, 22.31, 114.18],
@@ -52,12 +52,12 @@ def _poi_result(*names: str) -> dict:
 
 
 def test_engine_returns_none_on_empty_reply() -> None:
-    assert apply_invariants("", [_ok("geo.find_dentist", _poi_result("Dr Chan"))], _det()) is None
+    assert apply_invariants("", [_ok("geo.find_poi", _poi_result("Dr Chan"))], _det()) is None
 
 
 def test_engine_returns_none_on_whitespace_only_reply() -> None:
     assert (
-        apply_invariants("   \n  ", [_ok("geo.find_dentist", _poi_result("Dr Chan"))], _det())
+        apply_invariants("   \n  ", [_ok("geo.find_poi", _poi_result("Dr Chan"))], _det())
         is None
     )
 
@@ -71,7 +71,7 @@ def test_engine_returns_none_when_all_tool_results_empty() -> None:
     empty_result = {"category": "dentist", "pois": []}
     violation = apply_invariants(
         "I couldn't find any dentists nearby.",
-        [_ok("geo.find_dentist", empty_result)],
+        [_ok("geo.find_poi", empty_result)],
         _det(),
     )
     assert violation is None
@@ -82,7 +82,7 @@ def test_engine_returns_none_when_reply_has_no_denial_language() -> None:
     assert (
         apply_invariants(
             "Here are several dentists near you.",
-            [_ok("geo.find_dentist", _poi_result("Dr Chan", "Dr Wong"))],
+            [_ok("geo.find_poi", _poi_result("Dr Chan", "Dr Wong"))],
             _det(),
         )
         is None
@@ -94,7 +94,7 @@ def test_engine_returns_none_when_reply_mentions_a_record() -> None:
     assert (
         apply_invariants(
             "I couldn't find a specialist, but Dr Chan's clinic is nearby.",
-            [_ok("geo.find_dentist", _poi_result("Dr Chan", "Dr Wong"))],
+            [_ok("geo.find_poi", _poi_result("Dr Chan", "Dr Wong"))],
             _det(),
         )
         is None
@@ -106,22 +106,22 @@ def test_engine_fires_when_reply_denies_non_empty_data() -> None:
     without naming either."""
     violation = apply_invariants(
         "I couldn't find any dentists in your area, sorry.",
-        [_ok("geo.find_dentist", _poi_result("Dr Chan", "Dr Wong"))],
+        [_ok("geo.find_poi", _poi_result("Dr Chan", "Dr Wong"))],
         _det(),
     )
     assert isinstance(violation, InvariantViolation)
     assert violation.kind == "data_denial"
-    assert violation.tool_name == "geo.find_dentist"
+    assert violation.tool_name == "geo.find_poi"
     assert violation.record_count == 2
     # Corrective prompt names the tool + a sample record
-    assert "geo.find_dentist" in violation.corrective_prompt
+    assert "geo.find_poi" in violation.corrective_prompt
     assert "Dr Chan" in violation.corrective_prompt
 
 
 def test_engine_skips_errored_tool_results() -> None:
     """Error-status results don't count as 'returned data' even if .result is set."""
     err_result = ToolResult(
-        name="geo.find_dentist",
+        name="geo.find_poi",
         args={},
         status="error",
         latency_ms=10,
@@ -142,7 +142,7 @@ def test_engine_runs_invariants_in_order() -> None:
     stub = SynthesisInvariant(name="stub", check=_stub_check)
     violation = apply_invariants(
         "I couldn't find any.",
-        [_ok("geo.find_dentist", _poi_result("Dr Chan"))],
+        [_ok("geo.find_poi", _poi_result("Dr Chan"))],
         _det(),
         invariants=[stub, DATA_DENIAL_INVARIANT],
     )

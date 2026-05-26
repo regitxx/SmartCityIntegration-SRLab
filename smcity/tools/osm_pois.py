@@ -1,28 +1,30 @@
 # ruff: noqa: RUF003  # en-dashes in workbook range comments (S514–S530) are intentional.
-"""OpenStreetMap POI search via Overpass API — one thin tool per category.
+"""OpenStreetMap POI search via Overpass API — single tool, category enum.
 
-The old `geo.search_osm_pois` mega-tool packed 30 POI kinds behind a single
-`category` Literal. The LLM had to (1) pick this tool, (2) pick the right
-enum value from 30 string options buried in description prose. That second
-step is where the model hallucinated or fell back to general knowledge —
-particularly for niche kinds (bench, kiosk, dentist, handrail).
+v0.6.0 collapsed the 30 per-category POI tools (`geo.find_dentist`,
+`geo.find_convenience_store`, …) into one `geo.find_poi` tool whose
+`category` arg is a `Literal` over the same 30 slugs. The 30 individual
+tools shared one args schema (`FindPoiArgs`) and one handler shape, so
+exposing them as 30 OpenAI function schemas duplicated ~12K tokens of
+identical parameter prose in every prompt. With one tool the LLM sees
+the categories as a JSON-Schema enum (which gpt-oss-120b reads natively),
+and the prompt drops from ~19K tokens to ~7K.
 
-We export 30 named tools instead — `geo.find_dentist`, `geo.find_bench`,
-`geo.find_convenience_store`, … — generated from the same `_CATEGORIES`
-table. Tool routing is the operation frontier models are actually trained
-to do well; string-enum routing is the operation they hallucinate on.
+Routing accuracy is preserved by:
+- the `category` field's bilingual description (EN + 繁體 hints per slug),
+- the chain-rules POI engine (`smcity/chain_rules.py`), which still maps
+  user text → category slug for the `address_lookup` → `find_poi` chain.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
 import httpx
 from pydantic import BaseModel, Field, model_validator
 
-from smcity.tools.registry import ToolContext, ToolSpec, ToolUpstreamError
+from smcity.tools.registry import ToolContext, ToolScope, ToolSpec, ToolUpstreamError
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
@@ -73,46 +75,113 @@ _CATEGORIES: dict[str, _TagSpec] = {
     "handrail": _TagSpec([("handrail", "yes")]),
 }
 
-# Human-readable label per slug — used in each tool's description so the
-# LLM sees "Find dentists near a point" instead of `find_dentist`.
-_LABELS: dict[str, str] = {
-    "convenience_store": "convenience stores (7-Eleven, Circle K, VanGO, etc.)",
-    "supermarket": "supermarkets",
-    "hardware_store": "hardware stores",
-    "hairdresser": "hairdressers and barbershops",
-    "clothes_shop": "clothing shops",
-    "electronics_shop": "electronics shops",
-    "department_store": "department stores",
-    "variety_store": "variety / dollar stores (Japan Home, 多多, etc.)",
-    "houseware_shop": "houseware shops",
-    "beauty_shop": "beauty supply / cosmetics shops",
-    "optician": "opticians",
-    "shoe_shop": "shoe shops",
-    "greengrocer": "greengrocers / fruit-and-vegetable shops",
-    "bookstore": "bookstores",
-    "laundry": "laundromats and dry cleaners",
-    "kiosk": "kiosks and news stands",
-    "bookmaker": "betting shops (Jockey Club off-course branches)",
-    "public_toilet": "public toilets",
-    "place_of_worship": "places of worship (temples, churches, mosques)",
-    "recycling_location": "recycling collection points",
-    "veterinarian": "veterinarians / animal clinics",
-    "marketplace": "wet markets and open marketplaces",
-    "drinking_water": "public drinking water fountains",
-    "government_office": "government offices",
-    "dentist": "dentists",
-    "mtr_station_entrance": "MTR station entrances and exits",
-    "public_elevator": "public elevators (street / footbridge lifts)",
-    "bench": "public benches",
-    "shelter": "public shelters and awnings",
-    "handrail": "public handrails and railings",
+
+# The `category` field's description carries the bilingual EN + 繁體 hint
+# list — single source of truth so the LLM has the same routing info it
+# used to get from 30 separate tool descriptions. Order matches the order
+# in `_CATEGORIES` to keep the prompt prefix deterministic.
+_CATEGORY_HINTS: dict[str, str] = {
+    "convenience_store": "便利店 / 7-Eleven / Circle K / VanGO",
+    "supermarket": "超市 / 超級市場 (Wellcome, Park'n Shop, AEON)",
+    "hardware_store": "五金舖 / 五金店",
+    "hairdresser": "髮型屋 / 理髮店 / 髮廊",
+    "clothes_shop": "服裝店 / 衫舖",
+    "electronics_shop": "電器店 / 電子產品店",
+    "department_store": "百貨公司 (SOGO, Yata, Lane Crawford)",
+    "variety_store": "雜貨店 / 日本城 / 多多",
+    "houseware_shop": "家品店 / 家居用品店",
+    "beauty_shop": "美妝店 / 化妝品店 (SaSa, Bonjour)",
+    "optician": "眼鏡舖",
+    "shoe_shop": "鞋舖 / 鞋店",
+    "greengrocer": "生果舖 / 蔬果店",
+    "bookstore": "書店 / 書局",
+    "laundry": "洗衣店 / 乾洗店",
+    "kiosk": "報攤 / 小賣亭",
+    "bookmaker": "馬會投注站 (off-course Jockey Club)",
+    "public_toilet": "公廁 / 公共廁所 / 洗手間",
+    "place_of_worship": "廟宇 / 教堂 / 寺廟 / 清真寺",
+    "recycling_location": "回收站 / 回收箱 / 回收點",
+    "veterinarian": "獸醫 / 動物診所",
+    "marketplace": "街市 / 菜市場",
+    "drinking_water": "飲水機 / 公眾飲水器",
+    "government_office": "政府辦事處 / 民政事務處",
+    "dentist": "牙醫 / 牙科診所",
+    "mtr_station_entrance": "港鐵 / 地鐵出入口",
+    "public_elevator": "公共升降機 / 街道電梯",
+    "bench": "公眾長凳 / 休憩座椅",
+    "shelter": "公眾遮蔭處 / 涼亭 / 巴士站候車亭",
+    "handrail": "扶手 / 公眾欄杆",
 }
 
 
-# --- argument + result schemas (shared across all 30 tools) ---------------
+def _build_category_field_description() -> str:
+    """One bilingual index of every category slug → user-facing meaning.
+
+    Built at import time from `_CATEGORY_HINTS` so the table is the single
+    source of truth. Lives on the `category` field's description so the LLM
+    sees the slug↔meaning mapping in JSON Schema next to the enum it has to
+    pick from — that adjacency is what makes the collapse work as well as
+    the 30-separate-descriptions form did.
+    """
+    parts = [f"{slug} ({hint})" for slug, hint in _CATEGORY_HINTS.items()]
+    return (
+        "Category of POI to search for. Pick ONE slug from: "
+        + "; ".join(parts)
+        + "."
+    )
+
+
+PoiCategory = Literal[
+    "convenience_store",
+    "supermarket",
+    "hardware_store",
+    "hairdresser",
+    "clothes_shop",
+    "electronics_shop",
+    "department_store",
+    "variety_store",
+    "houseware_shop",
+    "beauty_shop",
+    "optician",
+    "shoe_shop",
+    "greengrocer",
+    "bookstore",
+    "laundry",
+    "kiosk",
+    "bookmaker",
+    "public_toilet",
+    "place_of_worship",
+    "recycling_location",
+    "veterinarian",
+    "marketplace",
+    "drinking_water",
+    "government_office",
+    "dentist",
+    "mtr_station_entrance",
+    "public_elevator",
+    "bench",
+    "shelter",
+    "handrail",
+]
+
+
+# Defensive runtime check — the Literal above and `_CATEGORIES` must stay
+# in lockstep, otherwise an LLM-emitted slug could pass schema validation
+# but blow up in `_build_query`. Fail loudly at import time instead.
+_LITERAL_VALUES: frozenset[str] = frozenset(PoiCategory.__args__)  # type: ignore[attr-defined]
+_CATEGORY_VALUES: frozenset[str] = frozenset(_CATEGORIES)
+if _CATEGORY_VALUES != _LITERAL_VALUES:  # pragma: no cover — startup invariant
+    missing = _LITERAL_VALUES ^ _CATEGORY_VALUES
+    raise RuntimeError(
+        f"PoiCategory Literal and _CATEGORIES disagree on slugs: {sorted(missing)}"
+    )
+
+
+# --- argument + result schemas --------------------------------------------
 
 
 class FindPoiArgs(BaseModel):
+    category: PoiCategory = Field(description=_build_category_field_description())
     lat: float | None = Field(default=None, ge=-90, le=90)
     lng: float | None = Field(default=None, ge=-180, le=180)
     radius_m: int = Field(
@@ -133,7 +202,7 @@ class FindPoiArgs(BaseModel):
         # skips `geo.address_lookup` and passes null lat/lng with no bbox
         # (observed in v0.5.4 live smoke). Forces the LLM to either provide a
         # point or an explicit bbox; either path is structurally correct.
-        # The chain_rules engine then auto-completes address_lookup -> find_X
+        # The chain_rules engine then auto-completes address_lookup -> find_poi
         # in the common case.
         has_point = self.lat is not None and self.lng is not None
         has_full_bbox = (
@@ -206,17 +275,15 @@ def _resolve_bbox(args: FindPoiArgs) -> tuple[float, float, float, float]:
     return _HK_BBOX
 
 
-async def _search_one_category(
-    category: str, args: FindPoiArgs, _ctx: ToolContext
-) -> FindPoiResult:
+async def _find_poi_handler(args: FindPoiArgs, _ctx: ToolContext) -> FindPoiResult:
     bbox = _resolve_bbox(args)
-    query = _build_query(category, bbox)
+    query = _build_query(args.category, bbox)
     try:
         async with httpx.AsyncClient(timeout=20.0) as h:
             r = await h.post(
                 OVERPASS_URL,
                 data={"data": query},
-                headers={"User-Agent": "smcity-hk-agent/0.5"},
+                headers={"User-Agent": "smcity-hk-agent/0.6"},
             )
             r.raise_for_status()
             data = r.json()
@@ -280,70 +347,52 @@ async def _search_one_category(
         if len(pois) >= args.max_results:
             break
 
-    return FindPoiResult(category=category, bbox_used=bbox, pois=pois)
+    return FindPoiResult(category=args.category, bbox_used=bbox, pois=pois)
 
 
-# --- factory: one ToolSpec per category -----------------------------------
+# --- the single ToolSpec --------------------------------------------------
 
 
-def _make_handler(category: str) -> Callable[[FindPoiArgs, ToolContext], Awaitable[FindPoiResult]]:
-    """Bind the category to a closure so each ToolSpec has its own handler.
-
-    Done as a top-level function (not a comprehension lambda) so the binding
-    is explicit and unambiguous — each call creates a fresh closure over its
-    own `category` argument.
-    """
-
-    async def _handler(args: FindPoiArgs, ctx: ToolContext) -> FindPoiResult:
-        return await _search_one_category(category, args, ctx)
-
-    return _handler
+# Public constants used by chain_rules, langrouter coverage, fuzz contracts,
+# tests. `POI_TOOL` is the registered tool name; `POI_CATEGORIES` is the set
+# of valid `category` arg values. `POI_TOOL_NAMES` is preserved (as a single-
+# element frozenset) so chain_rules' `required_successor_names` API doesn't
+# need a separate code path.
+POI_TOOL: str = "geo.find_poi"
+POI_CATEGORIES: frozenset[str] = frozenset(_CATEGORIES.keys())
+POI_TOOL_NAMES: frozenset[str] = frozenset({POI_TOOL})
 
 
-def _make_poi_tool(slug: str) -> ToolSpec[FindPoiArgs, FindPoiResult]:
-    # Description is intentionally terse. The previous form averaged ~45
-    # words per tool * 30 tools = ~1.3K tokens of duplicated prose in every
-    # prompt. With gpt-oss-120b that prompt-processing tax was breaking
-    # tool-calling on transport datasets (v0.5.0 regression). The label
-    # (from `_LABELS`) carries the discriminative info; result-shape detail
-    # is already in the schema; chain enforcement is in `smcity/chain_rules.py`
-    # rather than this prose.
-    label = _LABELS[slug]
-    return ToolSpec(
-        name=f"geo.find_{slug}",
-        description_en=(
-            f"Find {label} near a lat/lng (Hong Kong). "
-            "Pair with `geo.address_lookup` for landmark queries."
-        ),
-        args_schema=FindPoiArgs,
-        result_schema=FindPoiResult,
-        handler=_make_handler(slug),
-        ttl_seconds=60 * 60,  # OSM data churns slowly
-        budget_ms=8000,  # Overpass can be slow
-        upstream_langs=frozenset({"en", "zh-Hant", "zh-Hans"}),
-        upstream="overpass-api.de",
-    )
-
-
-OSM_POI_TOOLS: list[ToolSpec[FindPoiArgs, FindPoiResult]] = [
-    _make_poi_tool(slug) for slug in _CATEGORIES
-]
-
-
-# Public mapping: slug → full tool name. Used by smcity_fuzz.contracts to
-# express "the right tool for OSM category X is geo.find_X" without each
-# contract having to hard-code 30 strings.
-POI_TOOL_NAME: dict[str, str] = {slug: f"geo.find_{slug}" for slug in _CATEGORIES}
-
-# Reverse lookup for the orchestrator's chain-completion check (Fix 3).
-POI_TOOL_NAMES: frozenset[str] = frozenset(POI_TOOL_NAME.values())
+FIND_POI_TOOL: ToolSpec[FindPoiArgs, FindPoiResult] = ToolSpec(
+    name=POI_TOOL,
+    description_en=(
+        "Find points of interest near a lat/lng (Hong Kong). Specify a "
+        "`category` — covers shops (convenience_store, supermarket, "
+        "bookstore, …), amenities (public_toilet, dentist, place_of_worship, "
+        "…) and infrastructure (mtr_station_entrance, public_elevator, "
+        "bench, …). See the `category` field for the full bilingual list. "
+        "Pair with `geo.address_lookup` for landmark queries."
+    ),
+    args_schema=FindPoiArgs,
+    result_schema=FindPoiResult,
+    handler=_find_poi_handler,
+    ttl_seconds=60 * 60,  # OSM data churns slowly
+    budget_ms=8000,  # Overpass can be slow
+    upstream_langs=frozenset({"en", "zh-Hant", "zh-Hans"}),
+    upstream="overpass-api.de",
+    scope=ToolScope.DEFAULT,
+    domain="osm_poi",
+    citation_discriminator_key="category",
+)
 
 
 __all__ = [
-    "OSM_POI_TOOLS",
-    "POI_TOOL_NAME",
+    "FIND_POI_TOOL",
+    "POI_CATEGORIES",
+    "POI_TOOL",
     "POI_TOOL_NAMES",
     "FindPoiArgs",
     "FindPoiResult",
     "OsmPoi",
+    "PoiCategory",
 ]

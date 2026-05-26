@@ -118,8 +118,8 @@ async def test_osm_pois_parses_overpass_response() -> None:
     registry = build_default_registry()
     ctx = ToolContext(session_id="o-1")
     result = await registry.dispatch(
-        "geo.find_convenience_store",
-        {"lat": 22.3, "lng": 114.17, "radius_m": 500},
+        "geo.find_poi",
+        {"category": "convenience_store", "lat": 22.3, "lng": 114.17, "radius_m": 500},
         ctx,
     )
     assert result.status == "ok", result.error
@@ -151,8 +151,8 @@ async def test_osm_pois_dedupes_by_osm_id() -> None:
     # entirely. Provide an explicit point so this test stays focused on the
     # dedup logic it's actually checking.
     result = await registry.dispatch(
-        "geo.find_public_toilet",
-        {"lat": 22.3, "lng": 114.17},
+        "geo.find_poi",
+        {"category": "public_toilet", "lat": 22.3, "lng": 114.17},
         ctx,
     )
     assert result.status == "ok"

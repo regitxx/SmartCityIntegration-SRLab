@@ -214,9 +214,10 @@ async def test_chain_rule_auto_dispatches_poi_followup(
 ) -> None:
     """End-to-end proof of the chain_rules AutoDispatch path:
     LLM calls geo.address_lookup → chain rule infers 'dentist' from user
-    text → orchestrator deterministically dispatches geo.find_dentist with
-    the resolved lat/lng → both tools appear in tool_trace. No LLM re-roll
-    is needed for the chain step (the AutoDispatch path is deterministic)."""
+    text → orchestrator deterministically dispatches geo.find_poi with
+    category='dentist' and the resolved lat/lng → both tools appear in
+    tool_trace. No LLM re-roll is needed for the chain step (the AutoDispatch
+    path is deterministic)."""
     # ALS upstream — returns Tsim Sha Tsui at 22.30, 114.17.
     respx.get("https://www.als.gov.hk/lookup").mock(
         return_value=httpx.Response(
@@ -306,9 +307,16 @@ async def test_chain_rule_auto_dispatches_poi_followup(
     # Both tools must have run successfully.
     tool_names = [t.name for t in resp.tool_trace]
     assert "geo.address_lookup" in tool_names
-    assert "geo.find_dentist" in tool_names
+    assert "geo.find_poi" in tool_names
+    # AutoDispatch must have used category='dentist'.
+    poi_entries = [t for t in resp.tool_trace if t.name == "geo.find_poi"]
+    assert poi_entries and poi_entries[0].args.get("category") == "dentist"
     for t in resp.tool_trace:
         assert t.status == "ok", f"expected ok, got {t.name}={t.status}"
+    # Citation footer must preserve the category sub-type.
+    poi_citations = [c for c in resp.citations if c.tool == "geo.find_poi"]
+    assert poi_citations and poi_citations[0].discriminator == "dentist"
+    assert "find_poi/dentist" in resp.text
 
     # The chain.fired event identifies the rule + the deterministic kind.
     chain_events = [e for e in events if e.type == "chain.fired"]
@@ -358,8 +366,10 @@ async def test_synthesis_invariant_retries_on_data_denial(
         tool_calls=[
             {
                 "id": "call-find",
-                "name": "geo.find_dentist",
-                "arguments": json.dumps({"lat": 22.30, "lng": 114.17}),
+                "name": "geo.find_poi",
+                "arguments": json.dumps(
+                    {"category": "dentist", "lat": 22.30, "lng": 114.17}
+                ),
             }
         ],
         usage={},
@@ -398,10 +408,118 @@ async def test_synthesis_invariant_retries_on_data_denial(
     inv_events = [e for e in events if e.type == "invariant.violated"]
     assert len(inv_events) == 1, f"expected one invariant.violated event, got {len(inv_events)}"
     assert inv_events[0].data["name"] == "data_denial"
-    assert inv_events[0].data["tool"] == "geo.find_dentist"
+    assert inv_events[0].data["tool"] == "geo.find_poi"
     assert inv_events[0].data["records"] == 2
 
     # Final reply must be the GOOD retry, not the denial.
     assert "Dr Chan" in resp.text
     assert "couldn't find" not in resp.text.lower()
     assert "no data" not in resp.text.lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_gate_rectifies_when_retry_still_violates_spatial_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.6.0 regression guard: gpt-oss-120b sometimes calls geo.find_poi
+    without coords on Cantonese POI queries even after the corrective
+    re-prompt. The orchestrator must escalate to deterministic
+    rectification — drop the bare find_poi, inject geo.address_lookup, and
+    let chain_rules glue the chain together. End state: address_lookup +
+    find_poi(category=dentist, lat=..., lng=...) both fire OK."""
+    # ALS upstream — returns Tsim Sha Tsui at 22.30, 114.17.
+    respx.get("https://www.als.gov.hk/lookup").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "SuggestedAddress": [
+                    {
+                        "Address": {
+                            "PremisesAddress": {
+                                "EngPremisesAddress": {
+                                    "BuildingName": "Tsim Sha Tsui",
+                                    "EngDistrict": {"DcDistrict": "Yau Tsim Mong"},
+                                },
+                                "ChiPremisesAddress": {"BuildingName": "尖沙咀"},
+                                "GeospatialInformation": {
+                                    "Latitude": "22.30",
+                                    "Longitude": "114.17",
+                                },
+                            }
+                        }
+                    }
+                ]
+            },
+        )
+    )
+    # Overpass upstream — returns one dentist near the resolved point.
+    respx.post("https://overpass-api.de/api/interpreter").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "elements": [
+                    {
+                        "type": "node",
+                        "id": 1001,
+                        "lat": 22.301,
+                        "lon": 114.171,
+                        "tags": {"name": "Dr Chan Dental Clinic", "amenity": "dentist"},
+                    }
+                ]
+            },
+        )
+    )
+
+    bare_find_poi = LLMReply(
+        text="",
+        tool_calls=[
+            {
+                "id": "call-bare-poi",
+                "name": "geo.find_poi",
+                "arguments": json.dumps({"category": "dentist"}),  # no coords
+            }
+        ],
+        usage={},
+        elapsed_ms=80,
+    )
+    synth = LLMReply(
+        text="Dr Chan Dental Clinic 喺尖沙咀附近。",
+        tool_calls=[],
+        usage={},
+        elapsed_ms=40,
+    )
+    from smcity import orchestrator as orch_module
+
+    # Sequence: first call returns bare find_poi (gate fires + re-prompts),
+    # retry returns the SAME bare shape (gate fires again → rectification
+    # kicks in), then the synthesis call returns the prose reply.
+    monkeypatch.setattr(
+        orch_module, "chat", _scripted_chat([bare_find_poi, bare_find_poi, synth])
+    )
+
+    store = SessionStore(tmp_path / "sessions.sqlite3")
+    orch = Orchestrator(store)
+    req = TurnRequest(
+        session_id="rectify-1",
+        text="尖沙咀附近邊度有牙醫?",
+        locale_override="yue",
+    )
+
+    events: list[Any] = []
+    resp = await orch.handle_turn(req, emit=events.append)
+
+    # Rectification event must have fired with the right kind.
+    rect_events = [e for e in events if e.type == "gate.rectified"]
+    assert len(rect_events) == 1, f"expected one gate.rectified event, got {rect_events}"
+    assert rect_events[0].data["kind"] == "missing_spatial_scope"
+
+    # The rectified batch should have run address_lookup, then chain_rules
+    # auto-dispatched find_poi(category=dentist, lat=..., lng=...).
+    tool_names = [t.name for t in resp.tool_trace]
+    assert "geo.address_lookup" in tool_names
+    assert "geo.find_poi" in tool_names
+    poi_entries = [t for t in resp.tool_trace if t.name == "geo.find_poi"]
+    assert poi_entries and poi_entries[0].args.get("category") == "dentist"
+    for t in resp.tool_trace:
+        assert t.status == "ok", f"expected ok, got {t.name}={t.status}"

@@ -2,6 +2,68 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.6.0] — 2026-05-26
+
+**POI tool collapse + structural rectification escalation.** The 30 per-category `geo.find_<slug>` tools (`geo.find_dentist`, `geo.find_convenience_store`, …) collapse into one `geo.find_poi(category: Literal[...])`. Same routing semantics, one schema instead of thirty.
+
+### Why
+
+Every prompt was sending 30 near-identical `FindPoiArgs` schemas — the only thing that changed per-tool was the name and a one-line description. That was ~42K characters / ~12K tokens of duplicated parameter prose in every turn. The remaining 25 non-POI tools fit in ~24K chars, so the POI fleet was 63% of the schema budget for a single shared argument shape.
+
+### What changed
+
+| | Before | After |
+|---|---:|---:|
+| Registered tools | 55 | 26 |
+| Total schema bytes | ~66K | ~28K |
+| Approx prompt tokens (schemas only) | ~19K | ~7.9K |
+
+The savings come from sending the `category` enum once on a single tool instead of N times across N parallel tools. JSON Schema enums are something gpt-oss-120b reads natively, so routing accuracy is preserved — verified by both the unit suite and a live smoke pass.
+
+### Files changed
+
+- `smcity/tools/osm_pois.py` — `_make_poi_tool()` + 30-element `OSM_POI_TOOLS` list deleted. Replaced with a single `FIND_POI_TOOL`. `FindPoiArgs` gains a required `category: PoiCategory` Literal whose description carries the bilingual EN + 繁體 hint table (one source of truth, no per-tool redundancy). Startup invariant: the Literal and the underlying `_CATEGORIES` dict must agree on slugs — fails loudly at import if they drift.
+- `smcity/tools/registry.py` — `ToolSpec` gains an optional `citation_discriminator_key`. When set, the orchestrator pulls `result[<key>]` and attaches it to the tool's `Citation` so user-facing citations can preserve the sub-type a single tool covers. The POI tool sets this to `"category"`.
+- `smcity/schemas.py` — `Citation` gains an optional `discriminator: str | None` field for the sub-type.
+- `smcity/orchestrator.py` — `_append_trace_and_citations` reads the discriminator. `_rewrite_source_footer` renders `find_poi/dentist` (etc.) so the user-facing source line keeps the specificity the per-category tools used to provide.
+- `smcity/chain_rules.py` — POI auto-dispatch now emits `AutoDispatch(tool="geo.find_poi", args={"category": ..., "lat": ..., "lng": ...})`. The 30 multilingual keyword patterns (`_POI_CATEGORY_PATTERNS`) are unchanged — they were already keyed by slug, not by tool name.
+- `smcity/tool_call_gates.py` — new `FIND_POI_NEEDS_SPATIAL_SCOPE_GATE` (see below).
+- `smcity/prompts.py`, `smcity/langrouter/coverage.py`, `smcity_fuzz/contracts.py`, `smcity_fuzz/datasets.py`, `data/coverage_catalog.json`, `scripts/live_smoke.py`, `docs/architecture/ARCHITECTURE.md` — every reference to per-category POI tool names migrated to `geo.find_poi` + a `category` slug.
+- Tests — `test_chain_rules.py`, `test_tool_scope.py`, `test_osm_gmb_forecast.py`, `test_orchestrator.py`, `test_synthesis_invariants.py`, `test_tool_call_gates.py`, `test_tools.py`. New regression guards: schema-blob size `< 30K`, category Literal rejects unknown slugs / requires `category`, citation discriminator threads through, gate firing + rectification path. 338 → 357 tests.
+- `pyproject.toml` — 0.5.7 → 0.6.0.
+
+### The Cantonese POI snag — and the structural fix
+
+Live smoke against gpt-oss-120b on `尖沙咀附近邊度有牙醫?` exposed a regression specific to the collapse: the LLM occasionally called `geo.find_poi(category="dentist")` directly with no coordinates, skipping the `geo.address_lookup` precondition that the chain_rules POI engine relies on. The args validator rejected, the chain rule couldn't fire (no precondition result), and synthesis collapsed.
+
+Pre-v0.6.0 this didn't happen because the 30 separate POI tool descriptions each carried "Pair with `geo.address_lookup` for landmark queries" — 30 reinforcements of the same hint per prompt. The collapse left that hint in only one place. gpt-oss-120b's Cantonese routing path apparently needed the redundancy.
+
+Per the project's structural-enforcement principle, this is fixed mechanically rather than by tuning the prompt:
+
+1. **New pre-execution gate** — `FIND_POI_NEEDS_SPATIAL_SCOPE_GATE` fires when `geo.find_poi` is proposed without `lat`/`lng` or a full bbox. The first violation triggers the standard "re-prompt with corrective hint" path.
+2. **Rectification escalation** — when the LLM's retry STILL emits the same bad shape, the orchestrator's new `_rectify()` helper drops the bare `find_poi`, injects `geo.address_lookup(query=user_text)`, and lets the existing `chain_rules` POI engine auto-dispatch `find_poi(category=..., lat=..., lng=...)` once coords resolve. A new `gate.rectified` event is emitted for observability.
+
+Same lifecycle engines, one new gate + one new rectification path — no orchestrator surgery beyond adding the escalation hop. Both pieces are declarative and live next to their stage's other rules.
+
+### Live smoke result
+
+| Query                                                  | Before (v0.5.7) | After (v0.6.0) |
+|--------------------------------------------------------|:---:|:---:|
+| `next train at Central` (en)                           | ✅ | ✅ |
+| `where's the nearest 7-eleven near TST?` (en)          | ✅ | ✅ (chain_rules fired; one run hit a 504 from Overpass — upstream issue, not the collapse) |
+| `尖沙咀附近邊度有牙醫?` (yue)                          | ✅ via 30 tools | ✅ via gate + chain (rectification logged) |
+| `how do I get from Central to Sha Tin?` (en)           | ✅ plan_journey | ✅ plan_journey |
+| `MTR from Central to Sha Tin` (en)                     | ✅ plan_simple_route `[SPECIALIZED: mtr_only]` | ✅ same |
+| `find me a place to go` (en)                           | ✅ ASK_USER_ONLY_GATE redirect | ✅ same |
+
+### What this enables next
+
+A two-stage routing scheme (a small gemma-synth pre-pass that picks the top-K tools, then gpt-oss-120b sees only those schemas) is no longer the obvious next lever: the remaining ~25 non-POI tools fit comfortably in the prompt and the KV-cache prefix stays stable across turns. Future tool additions should pay the same "one slug, one description" discipline before reaching for dynamic schema filtering.
+
+### Tests
+
+357 tests pass. Ruff + mypy strict no regression from baseline.
+
 ## [0.5.7] — 2026-05-25
 
 **Single source of truth for the package version.** Surfaced immediately by the v0.5.6 deploy: blue and green were correctly running on `smcity:0.5.6`, but `GET /health` reported `"version":"0.5.0"`. The image tag, the Docker container's image config, and the version string the agent shipped to clients had drifted apart.

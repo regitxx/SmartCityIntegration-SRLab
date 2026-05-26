@@ -48,14 +48,14 @@ DATASET_COVERAGE: dict[str, set[SupportedLang]] = {
     "csdi.query_features": {"en", "zh-Hant"},
 }
 
-# Populate the 30 per-category POI tool entries from the same source of
-# truth used by the registry. Done at module-import time so DATASET_COVERAGE
-# stays a flat dict for everything downstream.
+# Populate the OSM POI tool entry from the same source of truth used by
+# the registry. Done at module-import time so DATASET_COVERAGE stays a
+# flat dict for everything downstream. v0.6.0: was 30 entries (one per
+# category); collapsed to the single geo.find_poi tool.
 def _seed_osm_poi_coverage() -> None:
-    from smcity.tools.osm_pois import POI_TOOL_NAMES  # local import — avoids cycle at module top
+    from smcity.tools.osm_pois import POI_TOOL  # local import — avoids cycle at module top
 
-    for tool_name in POI_TOOL_NAMES:
-        DATASET_COVERAGE[tool_name] = {"en", "zh-Hant", "zh-Hans"}
+    DATASET_COVERAGE[POI_TOOL] = {"en", "zh-Hant", "zh-Hans"}
 
 
 _seed_osm_poi_coverage()

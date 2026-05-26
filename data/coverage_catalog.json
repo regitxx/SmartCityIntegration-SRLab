@@ -82,7 +82,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_convenience_store",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "convenience_store"
@@ -96,7 +96,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_supermarket",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "supermarket"
@@ -110,7 +110,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_public_toilet",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "public_toilet"
@@ -124,7 +124,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_place_of_worship",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "place_of_worship"
@@ -138,7 +138,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_mtr_station_entrance",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "mtr_station_entrance"
@@ -152,7 +152,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_recycling_location",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "recycling_location"
@@ -166,7 +166,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_veterinarian",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "veterinarian"
@@ -180,7 +180,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_hardware_store",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "hardware_store"
@@ -194,7 +194,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_public_elevator",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "public_elevator"
@@ -208,7 +208,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_hairdresser",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "hairdresser"
@@ -222,7 +222,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_clothes_shop",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "clothes_shop"
@@ -236,7 +236,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_electronics_shop",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "electronics_shop"
@@ -250,7 +250,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_department_store",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "department_store"
@@ -264,7 +264,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_variety_store",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "variety_store"
@@ -278,7 +278,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_houseware_shop",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "houseware_shop"
@@ -292,7 +292,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_beauty_shop",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "beauty_shop"
@@ -306,7 +306,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_optician",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "optician"
@@ -320,7 +320,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_shoe_shop",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "shoe_shop"
@@ -334,7 +334,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_greengrocer",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "greengrocer"
@@ -348,7 +348,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_marketplace",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "marketplace"
@@ -362,7 +362,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_bookstore",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "bookstore"
@@ -376,7 +376,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_drinking_water",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "drinking_water"
@@ -390,7 +390,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_laundry",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "laundry"
@@ -404,7 +404,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_government_office",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "government_office"
@@ -418,7 +418,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_kiosk",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "kiosk"
@@ -432,7 +432,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_dentist",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "dentist"
@@ -446,7 +446,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_bookmaker",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "bookmaker"
@@ -460,7 +460,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_bench",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "bench"
@@ -474,7 +474,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_shelter",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "shelter"
@@ -488,7 +488,7 @@
       "format": "JSON / GeoJSON / GPX / KML",
       "status": "wired",
       "tools": [
-        "geo.find_handrail",
+        "geo.find_poi",
         "geo.address_lookup"
       ],
       "osm_category": "handrail"
