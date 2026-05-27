@@ -2,6 +2,67 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.6.3] — 2026-05-28
+
+**LLM-as-judge pipeline + the calibration that exposed the v0.6.2 report bias.** This release adds the missing piece between "we have fuzz results" and "we know if the agent's responses are good or bullshit": a runnable LLM judge over the existing `smcity_fuzz.judge.judge` rubric, plus the methodology fix that makes the judge's `factual_vs_trace` dimension trustworthy.
+
+### Why
+
+A stakeholder review surfaced the question "is the process particularly good enough?" — the rule-based contracts in `smcity_fuzz/contracts.py` only check bucket-level shapes (did the right tool fire? did the reply mention numbers?). They can't tell whether the agent's reply is actually correct vs. plausible-but-wrong vs. fabricated. The existing `smcity_fuzz/judge.py` had been designed exactly for this — five-dimension rubric with structured JSON output — but had never been wired into the coverage pipeline.
+
+### What's new
+
+- **`smcity_fuzz/coverage_judge.py`** — async runner that drives `judge()` over a `coverage_run` output JSONL, writes one structured `JudgeVerdict` per row, resumable per `question_id`. Same shape as `coverage_run.py` and `coverage_gen.py`.
+- **`smcity_fuzz/coverage_run.py`** — extended to keep `args`, `result`, and `result_summary` on every tool trace entry. Was discarding the raw result blob to keep JSONL small; that bias broke the judge's `factual_vs_trace` dimension because it had nothing to ground claims against. Adds ~5-10 KB per row to the JSONL — acceptable for the calibration gain.
+
+### What the calibration found
+
+Ran the judge twice over independent 500-row + 200-row samples of the v0.6.2 agent:
+
+| metric | biased (v0.6.2 coverage_run, no raw evidence) | calibrated (v0.6.3 coverage_run, full evidence) | Δ |
+|---|---:|---:|---:|
+| Pass rate | 3.6% | **32.5%** | +28.9 pp |
+| Avg total score | 4.30 / 10 | **5.67 / 10** | +1.37 |
+| `hallucinated_fact` rate | 39 / 100 | **14 / 100** | -25.0 |
+| `tool_error` rate | 56 / 100 | **11 / 100** | -44.8 |
+| `factual_vs_trace` avg | 0.32 / 2 | **1.01 / 2** | +0.69 |
+| `wrong_language` rate | 18.2 / 100 | 18.0 / 100 | -0.2 |
+| `wrong_tool` rate | 40.4 / 100 | 38.5 / 100 | -1.9 |
+
+The 3.6% headline in the v0.6.2 biased report was ~9× pessimistic — the judge had no way to verify "the tool returned data" claims and was punishing the agent for the absence of evidence. With full evidence the agent's real pass rate is ~32%. Still mediocre, but a dramatically different operational picture.
+
+The dimensions that **stayed put across both runs** (wrong_language, wrong_tool, incomplete, refused_wrongly) are the genuine signal. Those are the real v0.7 targets.
+
+### Files
+
+- `smcity_fuzz/coverage_judge.py` — new (197 lines).
+- `smcity_fuzz/coverage_run.py` — `tool_trace` entries now include `args`, `result`, `result_summary`. v0.6.3 marker in the inline comment.
+- `data/synth/v0.6.0_20260526_sample200_calibration.jsonl` — pinned 200-row stratified sample (a different draw from the 10k corpus than the 500 v0.6.2 sample) so future calibration runs are repeatable.
+- `pyproject.toml` — bumped 0.6.2 → 0.6.3.
+
+### How to use the pipeline
+
+```
+# Generate coverage results with full evidence (v0.6.3 default)
+python -m smcity_fuzz.coverage_run \
+  --questions data/synth/<corpus>.jsonl \
+  --agent-url https://smcity-1.taila366aa.ts.net \
+  --out logs/coverage_results.jsonl \
+  --concurrency 3 --timeout-s 90
+
+# Grade them with the LLM judge
+FUZZER_MODEL=openai/gpt-oss-120b python -m smcity_fuzz.coverage_judge \
+  --results logs/coverage_results.jsonl \
+  --out logs/coverage_judged.jsonl \
+  --concurrency 2 --timeout-s 120
+```
+
+The judge defaults to `openai/gpt-oss-20b` in fuzz settings — explicitly override to `openai/gpt-oss-120b` (the only large model loaded on the Mac Studio) until that default is fixed in a follow-up.
+
+### Tests
+
+No new tests this release — the work is observability + driver scripts, not agent behaviour. 370 existing tests still pass. Ruff + mypy strict no regression.
+
 ## [0.6.2] — 2026-05-27
 
 **Widen the LM Studio httpx exclude pattern.** v0.6.1's `_LM_STUDIO_EXCLUDE_PATTERNS` only suppressed `/v1/chat/completions` and `/v1/embeddings`, but the agent ALSO polls `/v1/models` on every health-check (~every 5 seconds via the LLM probe inside `/health`). Those polls produced bare `GET` spans at 2-4ms — fast and harmless individually, but they dominate the Phoenix span-list view at one row per 5s × thousands of seconds × multiple replicas. From a stakeholder's perspective the v0.6.1 fix looked broken even though the HK upstream renames (`hk.als.lookup`, `osm.overpass`, etc.) worked correctly.

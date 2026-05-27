@@ -134,6 +134,13 @@ async def _post_turn(
 
     # The agent payload mirrors smcity.schemas.TurnResponse — extract the
     # observable fields we'll analyse.
+    #
+    # v0.6.3 — we now keep `args`, `result`, and `result_summary` on each
+    # trace entry so the LLM judge can grade `factual_vs_trace` against
+    # what the tool actually returned, not just the tool name. Previously
+    # we discarded these to keep the JSONL small; the judge's hallucination
+    # detection was biased downward because it had no ground truth to
+    # check claims against.
     return {
         **base_row,
         "status": "ok",
@@ -141,10 +148,12 @@ async def _post_turn(
         "tool_trace": [
             {
                 "name": t.get("name"),
+                "args": t.get("args"),
                 "status": t.get("status"),
                 "latency_ms": t.get("latency_ms"),
                 "cached": t.get("cached", False),
-                # Skip the full result blob — the analyzer doesn't need it.
+                "result_summary": t.get("result_summary"),
+                "result": t.get("result"),
             }
             for t in (d.get("tool_trace") or [])
         ],
