@@ -39,7 +39,6 @@ from smcity_fuzz.judge import JudgeError, judge
 from smcity_fuzz.personas import LanguageCode
 from smcity_fuzz.settings import get_fuzz_settings
 
-
 # Map the coverage-row language tag onto judge.py's LanguageCode literal.
 _LANG_REMAP: dict[str, LanguageCode] = {
     "yue": "yue",

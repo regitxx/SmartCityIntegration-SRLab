@@ -1,3 +1,4 @@
+# ruff: noqa: RUF001  # ambiguous CJK punctuation is the whole point of these tests
 """Tests for the post-synthesis invariant engine.
 
 We test the mechanism (engine + record extraction + multilingual denial
@@ -17,9 +18,12 @@ from smcity.synthesis_invariants import (
     _DENIAL_PATTERN,
     DATA_DENIAL_INVARIANT,
     DEFAULT_INVARIANTS,
+    WRONG_LANGUAGE_INVARIANT,
     InvariantViolation,
     SynthesisInvariant,
     _extract_record_names,
+    _script_profile,
+    _wrong_language_check,
     apply_invariants,
 )
 from smcity.tools.registry import ToolResult
@@ -290,3 +294,113 @@ def test_denial_pattern_does_not_match_neutral_text() -> None:
 
 def test_default_invariants_contain_data_denial() -> None:
     assert DATA_DENIAL_INVARIANT in DEFAULT_INVARIANTS
+
+
+def test_default_invariants_contain_wrong_language() -> None:
+    assert WRONG_LANGUAGE_INVARIANT in DEFAULT_INVARIANTS
+
+
+# --- wrong_language invariant -------------------------------------------
+#
+# Calibrated fuzz showed ~18% of replies were in the wrong script
+# despite locale_override being set. This invariant is the structural
+# fallback for that: detect script mismatch post-synthesis and re-prompt.
+
+
+def _yue_det() -> LangDetection:
+    return LangDetection(
+        primary_lang="yue",
+        script="Hant",
+        confidence=1.0,
+        method="forced",
+        tts_locale="yue-HK",
+    )
+
+
+def _zho_hant_det() -> LangDetection:
+    return LangDetection(
+        primary_lang="zho",
+        script="Hant",
+        confidence=1.0,
+        method="forced",
+        tts_locale="zh-HK",
+    )
+
+
+def _en_det() -> LangDetection:
+    return _det("en")
+
+
+def test_wrong_language_fires_when_english_reply_to_cantonese_question() -> None:
+    """The canonical bug: user wrote Cantonese, agent replied in English."""
+    reply = "There is a dentist on Nathan Road, about 5 minutes walk away."
+    v = _wrong_language_check(reply, [], _yue_det())
+    assert isinstance(v, InvariantViolation)
+    assert v.kind == "wrong_language"
+    assert "yue" in v.corrective_prompt
+    assert "Cantonese" in v.corrective_prompt or "嘅" in v.corrective_prompt
+
+
+def test_wrong_language_fires_when_english_reply_to_traditional_chinese() -> None:
+    reply = "The nearest convenience store is at 123 Nathan Road."
+    v = _wrong_language_check(reply, [], _zho_hant_det())
+    assert isinstance(v, InvariantViolation)
+    assert v.kind == "wrong_language"
+
+
+def test_wrong_language_silent_for_natural_cantonese_reply() -> None:
+    """A reply in the right language must not trigger the invariant."""
+    reply = "尖沙咀附近有間「仁健牙科」係最近嘅牙醫，喺彌敦道。"
+    assert _wrong_language_check(reply, [], _yue_det()) is None
+
+
+def test_wrong_language_silent_for_natural_english_reply_to_english_question() -> None:
+    reply = "The next train at Central arrives in 3 minutes towards Chai Wan."
+    assert _wrong_language_check(reply, [], _en_det()) is None
+
+
+def test_wrong_language_silent_for_bilingual_reply() -> None:
+    """A reply that mixes English place names with Chinese prose is the
+    HK norm — should NOT fire even though Latin chars are present."""
+    reply = "尖沙咀（Tsim Sha Tsui）附近有間 7-Eleven，喺彌敦道（Nathan Road）。"
+    assert _wrong_language_check(reply, [], _yue_det()) is None
+
+
+def test_wrong_language_fires_when_chinese_reply_to_english_question() -> None:
+    """Inverse direction: English user got a Chinese reply."""
+    reply = "尖沙咀附近的牙醫位於彌敦道，步行約 5 分鐘。"
+    v = _wrong_language_check(reply, [], _en_det())
+    assert isinstance(v, InvariantViolation)
+    assert v.kind == "wrong_language"
+
+
+def test_wrong_language_silent_on_empty_reply() -> None:
+    """Empty replies are handled by a different layer; this invariant
+    should stay quiet to avoid double-counting."""
+    assert _wrong_language_check("", [], _yue_det()) is None
+    assert _wrong_language_check("   \n  ", [], _yue_det()) is None
+
+
+def test_wrong_language_silent_on_numeric_only_reply() -> None:
+    """A reply that is mostly numbers / coords has no script identity."""
+    reply = "22.30, 114.17 — 5 min."
+    assert _wrong_language_check(reply, [], _yue_det()) is None
+
+
+def test_script_profile_pure_english() -> None:
+    cjk, latin = _script_profile("Hello world from Hong Kong")
+    assert cjk == 0.0
+    assert latin > 0.9
+
+
+def test_script_profile_pure_chinese() -> None:
+    cjk, latin = _script_profile("尖沙咀附近有間牙醫診所")
+    assert cjk > 0.9
+    assert latin == 0.0
+
+
+def test_script_profile_balanced_bilingual() -> None:
+    """The HK reality: 30%+ in each script."""
+    cjk, latin = _script_profile("尖沙咀 Tsim Sha Tsui 附近的 7-Eleven 在 Nathan Road")
+    assert cjk > 0.2
+    assert latin > 0.2

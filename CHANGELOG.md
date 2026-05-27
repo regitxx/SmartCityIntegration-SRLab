@@ -2,6 +2,48 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.7.0] — 2026-05-28
+
+**`wrong_language` synthesis invariant.** Calibrated v0.6.3 fuzz showed ~18% of replies in a language different from the user's question — stable across biased and calibrated runs, so it's genuine agent behaviour. The `language_stick_reminder` system prompt was already in place but gpt-oss-120b drifts to English on Chinese queries anyway, especially when tool results contain English-named records.
+
+Structural fix per the project's "enforcement > prompt instruction" principle: detect script mismatch post-synthesis and re-prompt the LLM with a corrective hint that includes a sentence-starter exemplar in the target language.
+
+### How it works
+
+A new `WRONG_LANGUAGE_INVARIANT` plugged into the existing `apply_invariants` engine. Same shape as the `DATA_DENIAL_INVARIANT`:
+
+1. After synthesis, the orchestrator's `_maybe_retry_for_invariants()` runs every invariant.
+2. The new invariant classifies the reply by script: count CJK ideographs / Hiragana / Katakana / Hangul vs Latin letters, ignoring digits + punctuation.
+3. If the user's `primary_lang` expects CJK script (`yue` / `zho` / `jpn` / `kor` / detection.script in {Hant, Hans, Hiragana, Hangul}) AND the reply is dominantly Latin (≥30% Latin, <30% CJK), fire `kind="wrong_language"`.
+4. Inverse direction handled symmetrically.
+5. Corrective prompt is structural — it tells the LLM to rewrite using the same tool results in the user's language, and includes a concrete sentence-opener exemplar (e.g. for Cantonese: `"而家 / 喺 / 嘅 / 咗 / 冇"` and three opening phrases).
+6. The orchestrator's standard one-retry-per-turn invariant path takes over.
+
+### What about bilingual replies?
+
+A reply with even 30%+ characters in the user's expected script is treated as a valid bilingual reply and passes. HK Cantonese commonly mixes English place names into Chinese prose (`"尖沙咀 Tsim Sha Tsui 附近"`) — those are not failures. The 30% threshold keeps the false-positive rate near zero on natural HK text.
+
+### Edge cases handled
+
+- Empty / whitespace-only replies → skip (other invariants handle).
+- Replies under 8 meaningful characters → skip ("22.30, 114.17 — 5 min." has too little script content to grade confidently).
+- Replies with no script characters at all → skip.
+- Tested on: pure Cantonese, pure English, balanced bilingual, English-with-CJK-only-place-names, Chinese-with-English-name-fields, numeric-only.
+
+### Files
+
+- `smcity/synthesis_invariants.py` — new `_wrong_language_check`, `_script_profile`, `_meaningful_chars`, `_is_cjk`, `_is_latin`, `_build_wrong_language_prompt`. Doc-comment + the existing `_data_denial_check` engine are unchanged.
+- `tests/test_synthesis_invariants.py` — 11 new tests covering the two directions (CJK←→Latin), bilingual tolerance, threshold edge cases, and script-profile primitives. 43 tests in the invariants suite, 382 in the full suite.
+- `pyproject.toml` — bumped 0.6.3 → 0.7.0.
+
+### Expected impact
+
+The calibrated v0.6.3 baseline showed `wrong_language` rate at 18.0/100 turns. v0.7.0's structural fix should drive this toward zero on the next 200-row calibration. We'll measure after the deploy lands.
+
+### Tests
+
+382 tests pass (up from 370 — 12 new invariant + script-profile tests). Ruff + mypy strict no regression from baseline.
+
 ## [0.6.3] — 2026-05-28
 
 **LLM-as-judge pipeline + the calibration that exposed the v0.6.2 report bias.** This release adds the missing piece between "we have fuzz results" and "we know if the agent's responses are good or bullshit": a runnable LLM judge over the existing `smcity_fuzz.judge.judge` rubric, plus the methodology fix that makes the judge's `factual_vs_trace` dimension trustworthy.

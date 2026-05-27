@@ -280,14 +280,190 @@ DATA_DENIAL_INVARIANT = SynthesisInvariant(
 # Add new invariants here. Order matters — earlier invariants fire first
 # when multiple would apply (the engine returns on first match).
 
+# --- wrong_language invariant ---------------------------------------------
+#
+# Calibrated v0.6.3 fuzz showed ~18% of replies in a language different
+# from the user's question — and the rate is stable across "biased" and
+# "calibrated" runs, so this is genuine agent behaviour, not a judge
+# artifact. The `language_stick_reminder` system message already exists
+# in `smcity/prompts.py` but apparently isn't strong enough — gpt-oss-120b
+# drifts to English on Chinese queries especially when tool results
+# contain English-named records.
+#
+# Structural fix per the project's "enforcement > prompt instruction"
+# principle: detect the mismatch post-synthesis via character-class
+# heuristics (cheap, robust, no extra model call) and re-prompt the LLM
+# with a corrective hint that includes a sentence-starter in the target
+# language.
+
+# Detection rule, in plain language: classify each reply as "looks-CJK",
+# "looks-Latin", or "mixed/inconclusive" by the ratio of script-classified
+# code points. A reply is `wrong_language` when:
+#   - user is Chinese-script (yue / zho-* / detection.script in {Hant, Hans})
+#     AND the reply is looks-Latin
+#   - user is Latin-script (eng / fra / deu / …)
+#     AND the reply is looks-CJK
+# "mixed" replies (e.g. "Mong Kok 旺角 has 5 stops") are tolerated — they
+# match the bilingual reality of HK without inducing false positives.
+
+# Threshold below which a script class is treated as not-dominant. 30% of
+# the meaningful (non-whitespace, non-punctuation, non-digit) chars must
+# carry the script for it to count.
+_SCRIPT_DOMINANT_RATIO = 0.30
+
+
+def _meaningful_chars(text: str) -> str:
+    """Return only the characters that carry script identity.
+
+    Strips whitespace, digits, common punctuation, and ASCII brackets so
+    the ratio isn't dominated by numbers + punctuation that all replies
+    share. CJK punctuation and ASCII letters / CJK ideographs survive.
+    """
+    return "".join(
+        c
+        for c in text
+        if not c.isspace() and not c.isdigit() and c not in '.,;:!?()[]{}<>"\'-_+=*/\\|&^%$#@~`'
+    )
+
+
+def _is_cjk(c: str) -> bool:
+    """True for any character in the major CJK Unified Ideograph ranges."""
+    cp = ord(c)
+    return (
+        0x4E00 <= cp <= 0x9FFF  # CJK Unified Ideographs
+        or 0x3400 <= cp <= 0x4DBF  # CJK Extension A
+        or 0x20000 <= cp <= 0x2A6DF  # CJK Extension B
+        or 0x3000 <= cp <= 0x303F  # CJK Symbols and Punctuation
+        or 0xFF00 <= cp <= 0xFFEF  # Halfwidth and Fullwidth Forms
+        or 0x3040 <= cp <= 0x309F  # Hiragana (for jpn detection)
+        or 0x30A0 <= cp <= 0x30FF  # Katakana
+    )
+
+
+def _is_latin(c: str) -> bool:
+    return c.isascii() and c.isalpha()
+
+
+def _script_profile(text: str) -> tuple[float, float]:
+    """Return (cjk_ratio, latin_ratio) over meaningful characters."""
+    chars = _meaningful_chars(text)
+    if not chars:
+        return (0.0, 0.0)
+    cjk = sum(1 for c in chars if _is_cjk(c))
+    latin = sum(1 for c in chars if _is_latin(c))
+    n = len(chars)
+    return (cjk / n, latin / n)
+
+
+_CJK_SCRIPT_USERS: frozenset[str] = frozenset({"yue", "zho", "jpn", "kor"})
+_CJK_SCRIPT_CODES: frozenset[str] = frozenset({"Hant", "Hans", "Hiragana", "Hangul"})
+
+
+# Skip language grading on replies with very few meaningful characters —
+# something like "22.30, 114.17 — 5 min." classifies as ~100% Latin but
+# is really "all data, no prose", so flagging it as wrong-language would
+# be a false positive. 8 chars is enough to capture a short HK Cantonese
+# phrase like "5 分鐘到" (5 mins) and reject pure-numeric replies.
+_MIN_MEANINGFUL_CHARS = 8
+
+
+def _wrong_language_check(
+    reply: str,
+    _tool_results: list[ToolResult],
+    detection: LangDetection,
+) -> InvariantViolation | None:
+    """Fire when the reply's dominant script is opposite the user's.
+
+    Conservative — only fires when the reply is CLEARLY in the wrong
+    script. A reply with even ~30% characters in the user's expected
+    script is treated as a (possibly clunky but valid) bilingual reply
+    and passes through.
+    """
+    if not reply.strip():
+        return None  # other invariants handle empty replies
+    meaningful = _meaningful_chars(reply)
+    if len(meaningful) < _MIN_MEANINGFUL_CHARS:
+        return None  # too short to classify confidently
+    cjk_ratio, latin_ratio = _script_profile(reply)
+    if cjk_ratio == 0 and latin_ratio == 0:
+        return None  # nothing meaningful to grade
+
+    user_expects_cjk = (
+        detection.primary_lang in _CJK_SCRIPT_USERS
+        or detection.script in _CJK_SCRIPT_CODES
+    )
+
+    latin_dominant = latin_ratio >= _SCRIPT_DOMINANT_RATIO
+    cjk_dominant = cjk_ratio >= _SCRIPT_DOMINANT_RATIO
+    if user_expects_cjk and latin_dominant and not cjk_dominant:
+        return InvariantViolation(
+            name="wrong_language",
+            kind="wrong_language",
+            corrective_prompt=_build_wrong_language_prompt(detection, target="cjk"),
+        )
+    if (not user_expects_cjk) and cjk_dominant and not latin_dominant:
+        return InvariantViolation(
+            name="wrong_language",
+            kind="wrong_language",
+            corrective_prompt=_build_wrong_language_prompt(detection, target="latin"),
+        )
+    return None
+
+
+def _build_wrong_language_prompt(detection: LangDetection, *, target: str) -> str:
+    """Corrective prompt for the re-synthesis retry.
+
+    Includes a concrete sentence-opener exemplar in the target language —
+    the existing language_stick_reminder is a wordy instruction, this
+    invariant fires AFTER the LLM has already ignored that instruction
+    once, so we give it something more grounding to anchor on.
+    """
+    lang = detection.primary_lang
+    if target == "cjk":
+        opener_hint = ""
+        if lang == "yue":
+            opener_hint = (
+                "Begin your reply with natural Cantonese — words like 而家 / 喺 / "
+                "嘅 / 咗 / 冇 — NOT formal book Mandarin and NOT English. "
+                "Example openings: '尖沙咀附近有…', '而家…', '你可以行去…'."
+            )
+        elif lang == "zho":
+            opener_hint = (
+                "Reply in Chinese characters (繁體 if user wrote Traditional, "
+                "简体 if user wrote Simplified) — NOT English."
+            )
+        elif lang in {"jpn", "kor"}:
+            opener_hint = f"Reply in {lang!r} using the appropriate script."
+    else:  # target == "latin"
+        opener_hint = (
+            "Reply in plain English. Do NOT use Chinese characters in the "
+            "prose. Place names may stay in their native script when no "
+            "English form exists, but the body of the reply is English."
+        )
+    return (
+        f"Your previous reply was in the wrong script. The user wrote in "
+        f"{lang!r} (tts_locale {detection.tts_locale}), so the reply must "
+        "match that language. Rewrite the SAME information using the SAME "
+        f"tool results, but in {lang!r}. {opener_hint}"
+    )
+
+
+WRONG_LANGUAGE_INVARIANT = SynthesisInvariant(
+    name="wrong_language",
+    check=_wrong_language_check,
+)
+
+
 DEFAULT_INVARIANTS: list[SynthesisInvariant] = [
     DATA_DENIAL_INVARIANT,
+    WRONG_LANGUAGE_INVARIANT,
 ]
 
 
 __all__ = [
     "DATA_DENIAL_INVARIANT",
     "DEFAULT_INVARIANTS",
+    "WRONG_LANGUAGE_INVARIANT",
     "InvariantViolation",
     "SynthesisInvariant",
     "apply_invariants",
