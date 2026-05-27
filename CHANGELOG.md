@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.6.2] — 2026-05-27
+
+**Widen the LM Studio httpx exclude pattern.** v0.6.1's `_LM_STUDIO_EXCLUDE_PATTERNS` only suppressed `/v1/chat/completions` and `/v1/embeddings`, but the agent ALSO polls `/v1/models` on every health-check (~every 5 seconds via the LLM probe inside `/health`). Those polls produced bare `GET` spans at 2-4ms — fast and harmless individually, but they dominate the Phoenix span-list view at one row per 5s × thousands of seconds × multiple replicas. From a stakeholder's perspective the v0.6.1 fix looked broken even though the HK upstream renames (`hk.als.lookup`, `osm.overpass`, etc.) worked correctly.
+
+### Fix
+
+One-line widening of the pattern from `:1234/v1/chat/completions` + `:1234/v1/embeddings` to `:1234/v1/` — anything under LM Studio's OpenAI-compat API. The OpenAI SDK instrumentation already records the meaningful calls (chat completions) as `ChatCompletion` spans, so dropping the duplicate httpx coverage of the same endpoints loses no signal.
+
+### Files
+
+- `smcity/observability.py` — `_LM_STUDIO_EXCLUDE_PATTERNS` widened to `(r":1234/v1/",)`. Doc-comment updated with the v0.6.1-fixed-the-symptom-but-missed-/v1/models post-mortem.
+- `tests/test_observability.py` — env-var assertions adjusted to check for `:1234/v1/` instead of the specific endpoints.
+- `pyproject.toml` — bumped 0.6.1 → 0.6.2.
+
+### Tests
+
+13 observability tests still pass. 370 total no regression.
+
+### Operational note
+
+The fuzz currently running on v0.6.1 will keep emitting unfiltered `/v1/models` GET spans until this v0.6.2 deploy lands. The deploy uses the same zero-downtime layered roll; in-flight fuzz turns ride on `proxy_next_upstream` through the recreate window.
+
 ## [0.6.1] — 2026-05-27
 
 **Phoenix trace readability.** Observability-only release. No agent-behavior changes — every fix is in `smcity/observability.py`, `smcity/orchestrator.py` (LLM call-site wrappers), and `smcity/tools/registry.py` (richer span attributes). Triggered by a review where the existing Phoenix dashboard read as a wall of identical-looking `ChatCompletion`, `POST`, and `GET` rows that nobody outside the codebase could navigate.

@@ -128,13 +128,19 @@ def _http_request_hook(span: Any, request: Any) -> None:
 
 
 _LM_STUDIO_EXCLUDE_PATTERNS: tuple[str, ...] = (
-    # Match anything pointed at LM Studio's chat-completions endpoint. The
-    # env var is a comma-separated list of regex fragments; matching is
-    # against the full URL. We list the host:port plus the path so a
-    # different LM Studio (e.g. proxying a private model) is still
-    # captured if the operator changes only the host.
-    r":1234/v1/chat/completions",
-    r":1234/v1/embeddings",
+    # Match anything pointed at LM Studio's OpenAI-compatible API. v0.6.1
+    # only excluded /chat/completions + /embeddings, but the agent ALSO
+    # polls /v1/models on every health check (~once per 5s) — those
+    # produced an unfiltered "GET" span per poll, which dominated the
+    # Phoenix span-list view and made the v0.6.1 readability fix look
+    # broken even though the HK upstream renames worked. v0.6.2 widens
+    # the pattern to cover any path under LM Studio's /v1/.
+    #
+    # The env var is a comma-separated list of regex fragments matched
+    # against the full URL. We use the host:port + base path so a
+    # different LM Studio host (e.g. an operator's private proxy) still
+    # gets filtered after they update LLM_BASE_URL.
+    r":1234/v1/",
 )
 
 

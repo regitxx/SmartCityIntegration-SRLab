@@ -117,8 +117,7 @@ def test_excluded_urls_appends_lm_studio_when_unset() -> None:
     try:
         _set_httpx_excluded_urls()
         value = os.environ["OTEL_PYTHON_HTTPX_EXCLUDED_URLS"]
-        assert "1234/v1/chat/completions" in value
-        assert "1234/v1/embeddings" in value
+        assert ":1234/v1/" in value
     finally:
         _restore_env_var("OTEL_PYTHON_HTTPX_EXCLUDED_URLS", prior)
 
@@ -135,6 +134,6 @@ def test_excluded_urls_preserves_operator_provided_patterns() -> None:
         value = os.environ["OTEL_PYTHON_HTTPX_EXCLUDED_URLS"]
         # Operator's pattern preserved first, ours appended.
         assert value.startswith("internal.example.com,")
-        assert "1234/v1/chat/completions" in value
+        assert ":1234/v1/" in value
     finally:
         _restore_env_var("OTEL_PYTHON_HTTPX_EXCLUDED_URLS", prior)
