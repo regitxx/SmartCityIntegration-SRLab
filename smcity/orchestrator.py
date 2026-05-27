@@ -228,13 +228,16 @@ class Orchestrator:
         messages = self._build_messages(safe_text, detection, forced, slots, include_tools=True)
 
         try:
-            first = await chat(
-                messages,
-                tools=self._registry.openai_schemas(),
-                parallel_tool_calls=True,
-                session_id=req.session_id,
-                known_tool_names=set(self._registry.names()),
-            )
+            with get_tracer("smcity.orchestrator").start_as_current_span(
+                "llm.chat.decide"
+            ):
+                first = await chat(
+                    messages,
+                    tools=self._registry.openai_schemas(),
+                    parallel_tool_calls=True,
+                    session_id=req.session_id,
+                    known_tool_names=set(self._registry.names()),
+                )
         except LLMError as err:
             reply_text = "(LM Studio unreachable — check Tailscale and the Mac Studio)"
             slots.append_turn(req.text, reply_text)
@@ -295,13 +298,16 @@ class Orchestrator:
                     {"role": "system", "content": gate_violation.corrective_prompt},
                 ]
                 try:
-                    retry = await chat(
-                        retry_messages,
-                        tools=self._registry.openai_schemas(),
-                        parallel_tool_calls=True,
-                        session_id=req.session_id,
-                        known_tool_names=set(self._registry.names()),
-                    )
+                    with get_tracer("smcity.orchestrator").start_as_current_span(
+                        "llm.chat.gate_retry"
+                    ):
+                        retry = await chat(
+                            retry_messages,
+                            tools=self._registry.openai_schemas(),
+                            parallel_tool_calls=True,
+                            session_id=req.session_id,
+                            known_tool_names=set(self._registry.names()),
+                        )
                 except LLMError:
                     retry = None
                 if retry is not None and retry.tool_calls:
@@ -482,22 +488,23 @@ class Orchestrator:
         buf: list[str] = []
         first_token_at: float | None = None
         final_text: str | None = None
-        try:
-            async for event in chat_stream(
-                messages,
-                session_id=session_id,
-                known_tool_names=set(self._registry.names()),
-            ):
-                if event.kind == "token" and event.text:
-                    if first_token_at is None:
-                        first_token_at = time.perf_counter()
-                        emit(TurnEvent(type="turn.llm_first_token", data={}))
-                    buf.append(event.text)
-                    emit(TurnEvent(type="turn.token", data={"text": event.text}))
-                elif event.kind == "final":
-                    final_text = event.text
-        except LLMError as err:
-            buf.append(f" (synthesis error: {err})")
+        with get_tracer("smcity.orchestrator").start_as_current_span("llm.chat.synthesis"):
+            try:
+                async for event in chat_stream(
+                    messages,
+                    session_id=session_id,
+                    known_tool_names=set(self._registry.names()),
+                ):
+                    if event.kind == "token" and event.text:
+                        if first_token_at is None:
+                            first_token_at = time.perf_counter()
+                            emit(TurnEvent(type="turn.llm_first_token", data={}))
+                        buf.append(event.text)
+                        emit(TurnEvent(type="turn.token", data={"text": event.text}))
+                    elif event.kind == "final":
+                        final_text = event.text
+            except LLMError as err:
+                buf.append(f" (synthesis error: {err})")
 
         text = (final_text or "").strip()
         if text:
@@ -518,7 +525,10 @@ class Orchestrator:
             },
         ]
         try:
-            retry = await chat(retry_messages, session_id=session_id)
+            with get_tracer("smcity.orchestrator").start_as_current_span(
+                "llm.chat.synthesis_retry"
+            ):
+                retry = await chat(retry_messages, session_id=session_id)
             return (retry.text or "").strip() or "(I couldn't compose an answer — try rephrasing?)"
         except LLMError:
             return "(I couldn't compose an answer — try rephrasing?)"
@@ -664,13 +674,16 @@ class Orchestrator:
         # LLMHint — re-prompt the LLM with the hint appended.
         messages.append({"role": "system", "content": continuation.text})
         try:
-            retry = await chat(
-                messages,
-                tools=self._registry.openai_schemas(),
-                parallel_tool_calls=True,
-                session_id=session_id,
-                known_tool_names=set(self._registry.names()),
-            )
+            with get_tracer("smcity.orchestrator").start_as_current_span(
+                "llm.chat.chain_rules_retry"
+            ):
+                retry = await chat(
+                    messages,
+                    tools=self._registry.openai_schemas(),
+                    parallel_tool_calls=True,
+                    session_id=session_id,
+                    known_tool_names=set(self._registry.names()),
+                )
         except LLMError:
             return []
         if not retry.tool_calls:
@@ -743,11 +756,14 @@ class Orchestrator:
             {"role": "system", "content": violation.corrective_prompt},
         ]
         try:
-            retry = await chat(
-                retry_messages,
-                session_id=session_id,
-                known_tool_names=set(self._registry.names()),
-            )
+            with get_tracer("smcity.orchestrator").start_as_current_span(
+                "llm.chat.invariant_retry"
+            ):
+                retry = await chat(
+                    retry_messages,
+                    session_id=session_id,
+                    known_tool_names=set(self._registry.names()),
+                )
         except LLMError:
             return reply_text
         retry_text = (retry.text or "").strip()

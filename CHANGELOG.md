@@ -2,6 +2,91 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.6.1] — 2026-05-27
+
+**Phoenix trace readability.** Observability-only release. No agent-behavior changes — every fix is in `smcity/observability.py`, `smcity/orchestrator.py` (LLM call-site wrappers), and `smcity/tools/registry.py` (richer span attributes). Triggered by a review where the existing Phoenix dashboard read as a wall of identical-looking `ChatCompletion`, `POST`, and `GET` rows that nobody outside the codebase could navigate.
+
+### Four concrete fixes
+
+1. **LLM calls now name their purpose.** Every `chat()` and `chat_stream()` site in the orchestrator is wrapped in a named parent span:
+   - `llm.chat.decide` — first call where gpt-oss-120b picks tools
+   - `llm.chat.synthesis` — streaming call that composes the user-facing reply
+   - `llm.chat.synthesis_retry` — the fallback when synthesis collapsed (no prose, just tool-call tokens)
+   - `llm.chat.gate_retry` — re-prompt after a `tool_call_gate` rejected a proposal
+   - `llm.chat.chain_rules_retry` — re-prompt under the `LLMHint` continuation path
+   - `llm.chat.invariant_retry` — re-prompt after `synthesis_invariants` caught data-denial
+   The auto-instrumented `ChatCompletion` span still appears, but now nests under a labelled parent. A trace reads top-to-bottom as a lifecycle (decide → tools → synthesise → retries) instead of four indistinguishable rows.
+
+2. **LM Studio is excluded from the httpx instrumentation.** Pre-v0.6.1, every LLM call produced both a `ChatCompletion` span (OpenInference instrumentation of the OpenAI SDK) and a duplicate `POST` span (httpx instrumentation of the underlying HTTP request). Same duration, zero added signal, pure noise. We now append `:1234/v1/chat/completions` and `:1234/v1/embeddings` to `OTEL_PYTHON_HTTPX_EXCLUDED_URLS` at init time, so the duplicate POST never enters the span stream. Operator-set patterns are preserved (prepended).
+
+3. **Outbound HTTP spans renamed by destination.** The httpx instrumentation labels every outbound request as bare `GET` / `POST`. Phoenix's spans list then shows 145K rows that all look identical. We install a `request_hook` that rewrites the span name from the URL host + path:
+   - `hk.als.lookup` for the ALS geocoder
+   - `hk.mtr.next_trains` for MTR ETAs
+   - `hk.kmb.eta`, `hk.citybus.eta`, `hk.gmb.eta` for the three bus operators
+   - `hk.hko.weather`, `hk.hko.archive` for HKO endpoints
+   - `osm.overpass`, `osm.nominatim` for OpenStreetMap
+   - `hk.csdi.featureserver` for the CSDI generic FeatureServer
+   - `hk.hkha.estates` for Housing Authority
+   Unknown hosts fall back to `http.<host>` so spans still group, just less specifically. The mapping is a data-driven tuple — future upstreams add one row.
+
+4. **Tool spans gain semantic attributes.** Filter-friendly attributes set on every `tool.<name>` span:
+   - `tool.category` — first segment of the dotted name (`geo`, `transport`, `context`, `facility`, `housing`, `csdi`, `meta`)
+   - `tool.locale` — user's primary language (`yue`, `eng`, `zho`, …)
+   - `tool.query_lang` — language the tool was actually queried in (after translation routing)
+   - `tool.translation_applied` — boolean: did `choose_query_lang` translate
+   - `tool.poi_category` — POI category slug when the tool result carries one (specifically `geo.find_poi`)
+   The Phoenix filter bar can now answer questions like "show me every Cantonese turn where a translation was applied" without parsing args JSON.
+
+### Files
+
+- `smcity/observability.py` — `_http_request_hook` (span renamer) + `_set_httpx_excluded_urls` (env-var setter) + wiring into `HTTPXClientInstrumentor().instrument(..., request_hook=..., async_request_hook=...)`. Doc-string at the top of the module rewritten to reflect the new span taxonomy.
+- `smcity/orchestrator.py` — six `with get_tracer(...).start_as_current_span("llm.chat.<role>"):` wrappers, one per `chat()` / `chat_stream()` call site.
+- `smcity/tools/registry.py` — initial-attribute block on `tool.<name>` span expanded to include `tool.category`, `tool.locale`, `tool.query_lang`, `tool.translation_applied`. Post-dispatch hook now also sets `tool.poi_category` when the result dict carries one.
+- `tests/test_observability.py` (new, 13 tests) — covers the renamer for known + unknown hosts, the empty-host fallback, the no-raise guarantee, and the env-var preservation of operator-provided patterns.
+- `docs/PHOENIX_TRACES.md` — stakeholder-facing trace guide (this also landed as part of v0.6.0 but now reflects the new span names).
+
+### What this looks like in Phoenix
+
+Before:
+```
+smcity.turn (54.3s)
+├── ChatCompletion (2.5s)
+├── POST (2.5s)
+├── ChatCompletion (18.3s)
+├── POST (18.3s)
+├── tool.geo.address_lookup (78ms)
+├── GET (72ms)
+├── ChatCompletion (19s)
+├── POST (19s)
+├── tool.transport.find_stops_near_point (7ms)
+├── ChatCompletion (8.2s)
+├── POST (3ms)
+├── ChatCompletion (6s)
+└── POST (6s)
+```
+
+After:
+```
+smcity.turn (54.3s)
+├── llm.chat.decide (2.5s)
+│   └── ChatCompletion (2.5s)
+├── llm.chat.synthesis (18.3s)
+│   └── ChatCompletion (18.3s)
+├── tool.geo.address_lookup (78ms)
+│   └── hk.als.lookup (72ms)
+├── llm.chat.chain_rules_retry (19s)
+│   └── ChatCompletion (19s)
+├── tool.transport.find_stops_near_point (7ms)
+├── llm.chat.invariant_retry (8.2s)
+│   └── ChatCompletion (8.2s)
+└── llm.chat.synthesis_retry (6s)
+    └── ChatCompletion (6s)
+```
+
+### Tests
+
+370 tests pass (357 pre-existing + 13 new observability tests). Ruff + mypy strict no regression from baseline.
+
 ## [0.6.0] — 2026-05-26
 
 **POI tool collapse + structural rectification escalation.** The 30 per-category `geo.find_<slug>` tools (`geo.find_dentist`, `geo.find_convenience_store`, …) collapse into one `geo.find_poi(category: Literal[...])`. Same routing semantics, one schema instead of thirty.

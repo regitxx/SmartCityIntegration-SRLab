@@ -223,10 +223,20 @@ class ToolRegistry:
         from smcity.observability import get_tracer, set_attr_safe
 
         tracer = get_tracer("smcity.tools")
+        # Resolve metadata up-front so initial attributes are set even if
+        # the inner dispatch raises before result population. `category` is
+        # the first segment of the dotted name (e.g. `geo` / `transport` /
+        # `context`) — gives the Phoenix filter bar a coarse axis that
+        # works without a per-tool taxonomy table.
+        category = name.split(".", 1)[0] if "." in name else "uncategorized"
         with tracer.start_as_current_span(
             f"tool.{name}",
             attributes={
                 "tool.name": name,
+                "tool.category": category,
+                "tool.locale": ctx.locale,
+                "tool.query_lang": ctx.query_lang,
+                "tool.translation_applied": ctx.translation_applied,
                 "session.id": ctx.session_id,
             },
         ) as span:
@@ -234,6 +244,14 @@ class ToolRegistry:
             set_attr_safe(span, "tool.status", result.status)
             set_attr_safe(span, "tool.latency_ms", result.latency_ms)
             set_attr_safe(span, "tool.cached", result.cached)
+            # Surface the POI category slug as a span attribute when present
+            # so Phoenix's filter bar can answer "how often did the dentist
+            # category fire?" without parsing the args JSON. Cheap and
+            # generic — runs for every tool, no-op when the key is absent.
+            if isinstance(result.result, dict):
+                cat_slug = result.result.get("category")
+                if isinstance(cat_slug, str) and cat_slug:
+                    set_attr_safe(span, "tool.poi_category", cat_slug)
             if result.error:
                 set_attr_safe(span, "tool.error", result.error)
             if isinstance(result.result, dict):
