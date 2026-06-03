@@ -18,12 +18,12 @@ Routing accuracy is preserved by:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Literal
 
 import httpx
 from pydantic import BaseModel, Field, model_validator
 
+from smcity.tools.poi_categories import CATEGORIES, category_field_description
 from smcity.tools.registry import ToolContext, ToolScope, ToolSpec, ToolUpstreamError
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -31,104 +31,11 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 # Hong Kong bounding box (SW lat, SW lng, NE lat, NE lng).
 _HK_BBOX = (22.15, 113.83, 22.58, 114.44)
 
-
-# Category → list of Overpass tag filters. Each filter matches the
-# "(node|way)[key=value]" pattern Overpass expects.
-@dataclass(slots=True, frozen=True)
-class _TagSpec:
-    keys: list[tuple[str, str | None]]  # (key, value or None for presence check)
-
-
-_CATEGORIES: dict[str, _TagSpec] = {
-    # Shops (S514–S530 in the project workbook)
-    "convenience_store": _TagSpec([("shop", "convenience")]),
-    "supermarket": _TagSpec([("shop", "supermarket")]),
-    "hardware_store": _TagSpec([("shop", "hardware")]),
-    "hairdresser": _TagSpec([("shop", "hairdresser")]),
-    "clothes_shop": _TagSpec([("shop", "clothes")]),
-    "electronics_shop": _TagSpec([("shop", "electronics")]),
-    "department_store": _TagSpec([("shop", "department_store")]),
-    "variety_store": _TagSpec([("shop", "variety_store")]),
-    "houseware_shop": _TagSpec([("shop", "houseware")]),
-    "beauty_shop": _TagSpec([("shop", "beauty")]),
-    "optician": _TagSpec([("shop", "optician")]),
-    "shoe_shop": _TagSpec([("shop", "shoes")]),
-    "greengrocer": _TagSpec([("shop", "greengrocer")]),
-    "bookstore": _TagSpec([("shop", "books")]),
-    "laundry": _TagSpec([("shop", "laundry")]),
-    "kiosk": _TagSpec([("shop", "kiosk")]),
-    "bookmaker": _TagSpec([("shop", "bookmaker")]),
-    # Amenities (S531–S540)
-    "public_toilet": _TagSpec([("amenity", "toilets")]),
-    "place_of_worship": _TagSpec([("amenity", "place_of_worship")]),
-    "recycling_location": _TagSpec([("amenity", "recycling")]),
-    "veterinarian": _TagSpec([("amenity", "veterinary")]),
-    "marketplace": _TagSpec([("amenity", "marketplace")]),
-    "drinking_water": _TagSpec([("amenity", "drinking_water")]),
-    "government_office": _TagSpec([("office", "government")]),
-    "dentist": _TagSpec([("amenity", "dentist"), ("healthcare", "dentist")]),
-    # Infrastructure / road facilities (S541–S549)
-    "mtr_station_entrance": _TagSpec([("railway", "subway_entrance")]),
-    "public_elevator": _TagSpec([("highway", "elevator")]),
-    "bench": _TagSpec([("amenity", "bench"), ("bench", "yes")]),
-    "shelter": _TagSpec([("amenity", "shelter"), ("shelter", "yes")]),
-    "handrail": _TagSpec([("handrail", "yes")]),
-}
-
-
-# The `category` field's description carries the bilingual EN + 繁體 hint
-# list — single source of truth so the LLM has the same routing info it
-# used to get from 30 separate tool descriptions. Order matches the order
-# in `_CATEGORIES` to keep the prompt prefix deterministic.
-_CATEGORY_HINTS: dict[str, str] = {
-    "convenience_store": "便利店 / 7-Eleven / Circle K / VanGO",
-    "supermarket": "超市 / 超級市場 (Wellcome, Park'n Shop, AEON)",
-    "hardware_store": "五金舖 / 五金店",
-    "hairdresser": "髮型屋 / 理髮店 / 髮廊",
-    "clothes_shop": "服裝店 / 衫舖",
-    "electronics_shop": "電器店 / 電子產品店",
-    "department_store": "百貨公司 (SOGO, Yata, Lane Crawford)",
-    "variety_store": "雜貨店 / 日本城 / 多多",
-    "houseware_shop": "家品店 / 家居用品店",
-    "beauty_shop": "美妝店 / 化妝品店 (SaSa, Bonjour)",
-    "optician": "眼鏡舖",
-    "shoe_shop": "鞋舖 / 鞋店",
-    "greengrocer": "生果舖 / 蔬果店",
-    "bookstore": "書店 / 書局",
-    "laundry": "洗衣店 / 乾洗店",
-    "kiosk": "報攤 / 小賣亭",
-    "bookmaker": "馬會投注站 (off-course Jockey Club)",
-    "public_toilet": "公廁 / 公共廁所 / 洗手間",
-    "place_of_worship": "廟宇 / 教堂 / 寺廟 / 清真寺",
-    "recycling_location": "回收站 / 回收箱 / 回收點",
-    "veterinarian": "獸醫 / 動物診所",
-    "marketplace": "街市 / 菜市場",
-    "drinking_water": "飲水機 / 公眾飲水器",
-    "government_office": "政府辦事處 / 民政事務處",
-    "dentist": "牙醫 / 牙科診所",
-    "mtr_station_entrance": "港鐵 / 地鐵出入口",
-    "public_elevator": "公共升降機 / 街道電梯",
-    "bench": "公眾長凳 / 休憩座椅",
-    "shelter": "公眾遮蔭處 / 涼亭 / 巴士站候車亭",
-    "handrail": "扶手 / 公眾欄杆",
-}
-
-
-def _build_category_field_description() -> str:
-    """One bilingual index of every category slug → user-facing meaning.
-
-    Built at import time from `_CATEGORY_HINTS` so the table is the single
-    source of truth. Lives on the `category` field's description so the LLM
-    sees the slug↔meaning mapping in JSON Schema next to the enum it has to
-    pick from — that adjacency is what makes the collapse work as well as
-    the 30-separate-descriptions form did.
-    """
-    parts = [f"{slug} ({hint})" for slug, hint in _CATEGORY_HINTS.items()]
-    return (
-        "Category of POI to search for. Pick ONE slug from: "
-        + "; ".join(parts)
-        + "."
-    )
+# Backward-compatible alias — the canonical category data now lives in
+# `smcity/tools/poi_categories.py::CATEGORIES`. Kept so existing imports and
+# tests that reference `_CATEGORIES` keep working; iterate over `.keys()` for
+# slugs and `CATEGORIES[slug].tags` for the Overpass filters.
+_CATEGORIES = CATEGORIES
 
 
 PoiCategory = Literal[
@@ -181,7 +88,7 @@ if _CATEGORY_VALUES != _LITERAL_VALUES:  # pragma: no cover — startup invarian
 
 
 class FindPoiArgs(BaseModel):
-    category: PoiCategory = Field(description=_build_category_field_description())
+    category: PoiCategory = Field(description=category_field_description())
     lat: float | None = Field(default=None, ge=-90, le=90)
     lng: float | None = Field(default=None, ge=-180, le=180)
     radius_m: int = Field(
@@ -243,10 +150,10 @@ class FindPoiResult(BaseModel):
 
 
 def _build_query(category: str, bbox: tuple[float, float, float, float]) -> str:
-    spec = _CATEGORIES[category]
+    spec = CATEGORIES[category]
     lines: list[str] = []
     bbox_str = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
-    for key, value in spec.keys:
+    for key, value in spec.tags:
         filt = f'["{key}"]' if value is None else f'["{key}"="{value}"]'
         lines.append(f"  node{filt}({bbox_str});")
         lines.append(f"  way{filt}({bbox_str});")

@@ -2,6 +2,47 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.7.1] — 2026-06-03
+
+**`wrong_tool` routing fix + a single-source category registry.** Calibrated v0.7.0 fuzz put `wrong_tool` at 39.5/100 turns — the largest remaining defect. Pulling the judged sample apart showed it was two mechanisms, not one: 45/79 rows called *no tool at all* (a decide-step inaction problem, untouched here), and **26/79 called `geo.address_lookup` alone for what were unambiguously POI-find queries** (hardware supplier, clothes shops, beauty/hair salons, MTR entrances, toilets, markets, temples, bookstores, shelters, …). The `POI_CHAIN_RULE` is *supposed* to catch exactly that — address_lookup ran, find_poi didn't → auto-dispatch find_poi — but its question predicate returned False on **25 of the 26**, so the rule never fired.
+
+Root cause was a keyword table that had drifted and three matching bugs. Rather than grow that table (the patch-the-examples trap), this release fixes the architecture.
+
+### Single source of truth
+
+The category↔knowledge lived in **four parallel tables across two files** — `_CATEGORIES` (OSM tags), `_CATEGORY_HINTS` (LLM schema), `PoiCategory` (enum), and chain_rules' `_POI_CATEGORY_PATTERNS` (router regex). The LLM's notion of "what words mean `beauty_shop`" and the router's notion were maintained by hand, separately, and disagreed.
+
+New `smcity/tools/poi_categories.py` is the canonical registry: one `CategorySpec` per slug owns its OSM tags, its bilingual LLM hint, and its matching lexicon. The `find_poi` schema string, the enum, the Overpass tags, and the deterministic `categorize()` router all *derive* from it. Adding a category is now a one-place edit, and the model's view can't diverge from the router's. Net **−210 lines**.
+
+### Two matcher mechanisms (not per-keyword hacks)
+
+1. **Script normalisation** — user text runs through the existing `simplified_to_hk()` before matching, so a single HK-Traditional term covers Simplified input (百货 ⇒ 百貨). Chinese terms are now written in Traditional only.
+2. **ASCII-alnum lookaround boundaries** instead of `\b` — fixes both the English-plural bug (`\bshop\b` never matched "shops", documented for years on `benches?`) *and* the CJK-jammed-Latin bug (`\b` doesn't fire between a Chinese char and a glued-on English token like "搵個shelter", which is exactly how Cantonese mixes English). Each slug also matches its own literal form, since synth corpora occasionally leak the slug verbatim ("variety_store").
+
+`categorize()` runs deterministically (no second LLM hop — deliberate, given LM Studio sustains ~0.08 q/s) with the existing `LLMHint` as the fallback when no term matches.
+
+### Result on the real misroute corpus
+
+25 of the 26 v0.7.0 misroutes now route — each to the *correct* category. The 26th (自助售賣機 / vending machine) correctly stays unmatched: it isn't one of the 30 categories, so the rule falls to `LLMHint` and lets the LLM decide rather than forcing a wrong slug.
+
+The LLM-facing schema string is **byte-identical** to v0.7.0 (locked by a golden-hash test), so the next calibration's delta is attributable to routing alone, not a prompt change. Enriching the LLM hints with the new synonyms is a deliberate, separately-measured follow-up.
+
+### Files
+
+- `smcity/tools/poi_categories.py` — new canonical registry + `categorize()` + `category_field_description()`.
+- `smcity/tools/osm_pois.py` — derives tags/enum/schema from the registry; `_CATEGORIES` kept as a compat alias. −111 lines.
+- `smcity/chain_rules.py` — predicate + resolver now call shared `categorize()`; the private regex table is gone. −152 lines.
+- `tests/test_poi_categories.py` — 11 new tests: registry/enum/schema-hash invariants, both matcher mechanisms, HK-synonym corpus, and a cross-contamination test that locks first-match-wins ordering as categories are added.
+- `pyproject.toml` — bumped 0.7.0 → 0.7.1.
+
+### Measurement — pending
+
+The calibrated 200-row `coverage_run → coverage_judge` against the v0.6.3 baseline (32.5% pass, `wrong_tool` 39.5/100) **has not run yet** — the Mac Studio (LM Studio host) was offline at release time. Static analysis on the real corpus predicts a large `wrong_tool` reduction; the pass-rate delta will be recorded once the node is back and `smcity:0.7.1` is deployed.
+
+### Tests
+
+391 pass (up from 380 — 11 new). Ruff + mypy strict clean.
+
 ## [0.7.0] — 2026-05-28
 
 **`wrong_language` synthesis invariant.** Calibrated v0.6.3 fuzz showed ~18% of replies in a language different from the user's question — stable across biased and calibrated runs, so it's genuine agent behaviour. The `language_stick_reminder` system prompt was already in place but gpt-oss-120b drifts to English on Chinese queries anyway, especially when tool results contain English-named records.
