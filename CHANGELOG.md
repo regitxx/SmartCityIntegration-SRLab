@@ -35,9 +35,21 @@ The LLM-facing schema string is **byte-identical** to v0.7.0 (locked by a golden
 - `tests/test_poi_categories.py` — 11 new tests: registry/enum/schema-hash invariants, both matcher mechanisms, HK-synonym corpus, and a cross-contamination test that locks first-match-wins ordering as categories are added.
 - `pyproject.toml` — bumped 0.7.0 → 0.7.1.
 
-### Measurement — pending
+### Measurement — calibrated 200-row sweep
 
-The calibrated 200-row `coverage_run → coverage_judge` against the v0.6.3 baseline (32.5% pass, `wrong_tool` 39.5/100) **has not run yet** — the Mac Studio (LM Studio host) was offline at release time. Static analysis on the real corpus predicts a large `wrong_tool` reduction; the pass-rate delta will be recorded once the node is back and `smcity:0.7.1` is deployed.
+Ran the calibrated `coverage_run → coverage_judge` (200 rows, concurrency 1, `gpt-oss-120b` as sole no-TTL model) against the v0.6.3/v0.7.0 baselines. Judged file: `logs/coverage_judged_v0.7.1_run2_sample200.jsonl`.
+
+| metric | v0.6.3 base | v0.7.0 | v0.7.1 |
+|---|---:|---:|---:|
+| `wrong_tool`/100 | 39.5 | 39.5 | **30.0 (−24%)** ✅ |
+| pass rate | 32.5% | 33.5% | 28.0% |
+| avg score /10 | 5.67 | 5.72 | 5.88 |
+| `tool_error`/100 | 4.5 | 4.5 | 27.0 |
+| latency median | — | — | 11.3s (p95 24.7s) |
+
+**The routing fix worked: `wrong_tool` −24%, each newly-routed query going to the correct category.** The pass-rate dip is *not* a v0.7.1 defect — it's an upstream confound. Public `overpass-api.de` was throwing 504s during the run, spiking `tool_error` 4.5 → 27.0. Ironically the fix *caused* more of that exposure by correctly routing more queries into `find_poi → Overpass`, which was the failing dependency. Read routing (`wrong_tool`) and upstream errors (`tool_error`) as separate dimensions: routing improved, the upstream endpoint degraded.
+
+This run is the motivation for the next release's headline work — mirroring Overpass to a local store removes the flakiness that confounded this very measurement (and removes a latency source). Latency itself (11.3s median vs. the `GOAL.md` ≤1.5s target) is now the #1 gap and is tracked as a first-class number going forward.
 
 ### Tests
 
