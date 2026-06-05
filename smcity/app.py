@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,13 +25,16 @@ from fastapi.staticfiles import StaticFiles
 
 from smcity import __version__
 from smcity.coverage import CoverageReport, compute_coverage
+from smcity.data.poi_refresh import nightly_refresh_loop
+from smcity.data.poi_store import get_poi_store
 from smcity.llm import ping
 from smcity.observability import init_tracing, shutdown_tracing
 from smcity.orchestrator import Orchestrator, TurnEvent
 from smcity.ratelimit import RateLimiter
-from smcity.schemas import Health, TurnRequest, TurnResponse
+from smcity.schemas import Health, PoiMirrorHealth, TurnRequest, TurnResponse
 from smcity.session import SessionStore, is_valid_session_id
 from smcity.settings import get_settings
+from smcity.tools.poi_categories import CATEGORIES
 
 log = structlog.get_logger("smcity")
 
@@ -72,9 +75,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.store = store
     app.state.orchestrator = orchestrator
     app.state.limiter = limiter
+
+    # Nightly POI-mirror refresh. Both replicas spawn the loop; a file-lock on
+    # the shared /app/state volume ensures only one actually refreshes per cycle
+    # (see smcity.data.poi_refresh). Until the first pass completes, find_poi
+    # falls back to live Overpass.
+    poi_refresh_task: asyncio.Task[None] | None = None
+    if s.poi_store_enabled and s.poi_refresh_enabled:
+        poi_refresh_task = asyncio.create_task(nightly_refresh_loop(get_poi_store()))
+
     log.info("startup", base_url=s.llm_base_url, model=s.llm_model, version=__version__)
     yield
     log.info("shutdown")
+    if poi_refresh_task is not None:
+        poi_refresh_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await poi_refresh_task
     shutdown_tracing()
 
 
@@ -89,16 +105,37 @@ app = FastAPI(
 # ---- HTTP endpoints ------------------------------------------------------
 
 
+def _poi_mirror_health(s: Any) -> PoiMirrorHealth:
+    fresh = get_poi_store().freshness()
+    stale = False
+    if fresh.oldest_refresh is not None:
+        age_h = (
+            datetime.now(UTC) - datetime.fromisoformat(fresh.oldest_refresh)
+        ).total_seconds() / 3600.0
+        stale = age_h > 2 * s.poi_refresh_interval_hours
+    return PoiMirrorHealth(
+        enabled=s.poi_store_enabled,
+        categories_populated=fresh.categories_populated,
+        categories_total=len(CATEGORIES),
+        total_pois=fresh.total_pois,
+        oldest_refresh=fresh.oldest_refresh,
+        newest_refresh=fresh.newest_refresh,
+        stale=stale,
+    )
+
+
 @app.get("/health", response_model=Health)
 async def health() -> Health:
     reachable, models = await ping()
     s = get_settings()
     llm_ok = reachable and s.llm_model in models
+    poi_mirror = await asyncio.to_thread(_poi_mirror_health, s)
     return Health(
         status="ok" if llm_ok else "degraded",
         llm_reachable=reachable,
         llm_model=s.llm_model,
         version=__version__,
+        poi_mirror=poi_mirror,
     )
 
 

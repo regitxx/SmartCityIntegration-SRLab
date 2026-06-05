@@ -18,11 +18,14 @@ Routing accuracy is preserved by:
 
 from __future__ import annotations
 
-from typing import Literal
+import asyncio
+from typing import Any, Literal
 
 import httpx
 from pydantic import BaseModel, Field, model_validator
 
+from smcity.data.poi_store import get_poi_store
+from smcity.settings import get_settings
 from smcity.tools.poi_categories import CATEGORIES, category_field_description
 from smcity.tools.registry import ToolContext, ToolScope, ToolSpec, ToolUpstreamError
 
@@ -30,6 +33,32 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 # Hong Kong bounding box (SW lat, SW lng, NE lat, NE lng).
 _HK_BBOX = (22.15, 113.83, 22.58, 114.44)
+
+# Citation source labels — distinct so an A/B sweep can tell which path served a
+# given POI result. Both are OpenStreetMap data; "local mirror" means it came
+# from the nightly SQLite snapshot, "Overpass" means a live API call.
+SOURCE_MIRROR = "openstreetmap.org (local mirror)"
+SOURCE_LIVE = "openstreetmap.org (Overpass)"
+
+# OSM tag keys surfaced on each POI. Shared by the live parse and the nightly
+# refresh (which reuses `_parse_overpass_elements`) so the mirror and the live
+# path expose the same fields — no drift between them.
+_KEPT_TAG_KEYS: frozenset[str] = frozenset(
+    {
+        "name",
+        "name:en",
+        "name:zh",
+        "brand",
+        "operator",
+        "opening_hours",
+        "wheelchair",
+        "website",
+        "phone",
+        "addr:street",
+        "addr:housenumber",
+        "religion",
+    }
+)
 
 # Backward-compatible alias — the canonical category data now lives in
 # `smcity/tools/poi_categories.py::CATEGORIES`. Kept so existing imports and
@@ -143,7 +172,7 @@ class FindPoiResult(BaseModel):
     category: str  # the slug, e.g. "dentist"
     bbox_used: tuple[float, float, float, float]
     pois: list[OsmPoi]
-    source: str = "openstreetmap.org (Overpass)"
+    source: str = SOURCE_LIVE
 
 
 # --- Overpass query construction ------------------------------------------
@@ -182,21 +211,20 @@ def _resolve_bbox(args: FindPoiArgs) -> tuple[float, float, float, float]:
     return _HK_BBOX
 
 
-async def _find_poi_handler(args: FindPoiArgs, _ctx: ToolContext) -> FindPoiResult:
-    bbox = _resolve_bbox(args)
-    query = _build_query(args.category, bbox)
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as h:
-            r = await h.post(
-                OVERPASS_URL,
-                data={"data": query},
-                headers={"User-Agent": "smcity-hk-agent/0.6"},
-            )
-            r.raise_for_status()
-            data = r.json()
-    except httpx.HTTPError as err:
-        raise ToolUpstreamError(f"Overpass API failed: {err}") from err
+def _parse_overpass_elements(
+    data: dict[str, Any], max_results: int | None = None
+) -> list[OsmPoi]:
+    """Turn a raw Overpass `out center` payload into `OsmPoi` rows.
 
+    Single source of truth for OSM-element -> POI shaping, used by BOTH the live
+    `find_poi` fallback and the nightly `poi_refresh` mirror build. Centralising
+    it here is deliberate: when the live path and the mirror derive their fields
+    from the same code, the mirror cannot silently diverge from what a live
+    query would have returned (the drift class v0.7.1 closed for category tags).
+
+    `max_results=None` keeps every element — the refresh wants the full set;
+    the live handler passes its cap.
+    """
     pois: list[OsmPoi] = []
     seen: set[tuple[str, int]] = set()
     for el in data.get("elements") or []:
@@ -230,31 +258,81 @@ async def _find_poi_handler(args: FindPoiArgs, _ctx: ToolContext) -> FindPoiResu
                 name_en=tags.get("name:en"),
                 name_zh=tags.get("name:zh") or tags.get("name:zh-Hant") or tags.get("name:zh-Hans"),
                 address=tags.get("addr:full") or tags.get("addr:street"),
-                tags={
-                    k: str(v)
-                    for k, v in tags.items()
-                    if k
-                    in {
-                        "name",
-                        "name:en",
-                        "name:zh",
-                        "brand",
-                        "operator",
-                        "opening_hours",
-                        "wheelchair",
-                        "website",
-                        "phone",
-                        "addr:street",
-                        "addr:housenumber",
-                        "religion",
-                    }
-                },
+                tags={k: str(v) for k, v in tags.items() if k in _KEPT_TAG_KEYS},
             )
         )
-        if len(pois) >= args.max_results:
+        if max_results is not None and len(pois) >= max_results:
             break
 
-    return FindPoiResult(category=args.category, bbox_used=bbox, pois=pois)
+    return pois
+
+
+async def fetch_overpass(query: str) -> dict[str, Any]:
+    """POST an Overpass query and return the parsed JSON, or raise upstream.
+
+    Shared by the live tool fallback and the nightly refresh so both speak to
+    `overpass-api.de` with identical timeout/headers semantics.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as h:
+            r = await h.post(
+                OVERPASS_URL,
+                data={"data": query},
+                headers={"User-Agent": "smcity-hk-agent/0.7"},
+            )
+            r.raise_for_status()
+            data: dict[str, Any] = r.json()
+            return data
+    except httpx.HTTPError as err:
+        raise ToolUpstreamError(f"Overpass API failed: {err}") from err
+
+
+async def _find_poi_live(
+    category: str, bbox: tuple[float, float, float, float], max_results: int
+) -> list[OsmPoi]:
+    """Query live Overpass for one category within a bbox (the fallback path)."""
+    data = await fetch_overpass(_build_query(category, bbox))
+    return _parse_overpass_elements(data, max_results)
+
+
+async def _find_poi_handler(args: FindPoiArgs, _ctx: ToolContext) -> FindPoiResult:
+    bbox = _resolve_bbox(args)
+    settings = get_settings()
+
+    # Local mirror first. `is_populated` is true once a category has been
+    # refreshed (even to zero rows), so a genuinely-empty category does not loop
+    # back to live Overpass forever. A store error degrades to the fallback
+    # rather than failing the turn.
+    if settings.poi_store_enabled:
+        store = get_poi_store()
+        try:
+            populated = await asyncio.to_thread(store.is_populated, args.category)
+            if populated:
+                rows = await asyncio.to_thread(
+                    store.query, args.category, bbox, args.max_results
+                )
+                pois = [OsmPoi(**row) for row in rows]
+                return FindPoiResult(
+                    category=args.category,
+                    bbox_used=bbox,
+                    pois=pois,
+                    source=SOURCE_MIRROR,
+                )
+        except Exception:  # mirror is best-effort; fall through to live
+            if not settings.poi_overpass_fallback:
+                raise
+
+    if not settings.poi_overpass_fallback:
+        # A/B isolation mode: no mirror hit and fallback disabled -> empty result
+        # (an honest "mirror has nothing", not a live call that masks the gap).
+        return FindPoiResult(
+            category=args.category, bbox_used=bbox, pois=[], source=SOURCE_MIRROR
+        )
+
+    pois = await _find_poi_live(args.category, bbox, args.max_results)
+    return FindPoiResult(
+        category=args.category, bbox_used=bbox, pois=pois, source=SOURCE_LIVE
+    )
 
 
 # --- the single ToolSpec --------------------------------------------------

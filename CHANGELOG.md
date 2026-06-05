@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.8.0] — 2026-06-05
+
+**A local POI mirror, so `find_poi` stops hitting public Overpass on every turn.** `geo.find_poi` previously POSTed to `overpass-api.de` for every request. That endpoint is slow and intermittently 504s — a latency source *and* a measurement confounder (a 504 surfaces as a `tool_error` that has nothing to do with the model, which muddied the v0.7.1 calibration). This release adds a nightly SQLite mirror and queries it first.
+
+### What's new
+
+New `smcity/data/poi_store.py` is a SQLite + R*Tree spatial mirror of the 30 POI categories over the Hong Kong bbox. `smcity/data/poi_refresh.py` rebuilds it nightly, **in-process** (an asyncio task in the app lifespan), with an `fcntl` advisory lock on the shared `/app/state` volume so that — across the two blue/green replicas — exactly one refreshes per cycle. No extra service, no host cron: the lock *is* the leader election, and it lives next to the DB it guards. A `python -m smcity.data.poi_refresh` CLI gives ops a manual warm-up.
+
+`find_poi` now queries the mirror first and falls back to live Overpass behind a flag (`POI_OVERPASS_FALLBACK`, the A/B switch). On a fresh deploy the mirror is empty, so every query transparently falls back to live exactly as before — until the first refresh fills it, within minutes. Freshness is tracked per category, so a category that genuinely has zero POIs in HK doesn't loop back to live forever.
+
+### No drift, by construction
+
+The refresh does **not** re-implement tag derivation or element parsing. It calls the live tool's own `_build_query` (Overpass query) and a newly-factored `_parse_overpass_elements` (element → `OsmPoi` shaping), so the mirror is byte-for-byte what a live `find_poi` would have returned. Same single-source-of-truth discipline the category registry established in v0.7.1, extended to the data path. A parity test locks it.
+
+### Observability
+
+`/health` gains a `poi_mirror` block: categories populated (of 30), total POIs, oldest/newest refresh timestamp, and a `stale` flag (oldest refresh older than 2× the interval). So we can see at a glance how fresh the mirror is.
+
+### Notes
+
+- The nightly refresh offloads its SQLite writes to a worker thread (`asyncio.to_thread`), so a large category's insert can't block the event loop and spike latency for users on the replica doing the refresh — most visible during the startup warm-up right after a deploy.
+- WAL on the shared volume across both replicas is the same pattern `SessionStore` already runs in production, so the concurrency story is proven, not new.
+- 15 new tests (`tests/test_poi_store.py`): store round-trip / bbox / limit, zero-row freshness, parse parity, local-first-no-network, cold fallback, A/B isolation, the full 30-category sweep, and the cross-replica lock.
+
 ## [0.7.1] — 2026-06-03
 
 **`wrong_tool` routing fix + a single-source category registry.** Calibrated v0.7.0 fuzz put `wrong_tool` at 39.5/100 turns — the largest remaining defect. Pulling the judged sample apart showed it was two mechanisms, not one: 45/79 rows called *no tool at all* (a decide-step inaction problem, untouched here), and **26/79 called `geo.address_lookup` alone for what were unambiguously POI-find queries** (hardware supplier, clothes shops, beauty/hair salons, MTR entrances, toilets, markets, temples, bookstores, shelters, …). The `POI_CHAIN_RULE` is *supposed* to catch exactly that — address_lookup ran, find_poi didn't → auto-dispatch find_poi — but its question predicate returned False on **25 of the 26**, so the rule never fired.

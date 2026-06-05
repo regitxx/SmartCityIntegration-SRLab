@@ -53,6 +53,11 @@ services:
       # Replica label — appears as `service.instance.id` in Phoenix spans
       # so you can tell which replica served a given request.
       OTEL_RESOURCE_ATTRIBUTES: "service.instance.id=blue"
+      # Local OSM POI mirror — lives on the shared /app/state volume so both
+      # replicas read the same snapshot. Both run the nightly refresh loop, but
+      # a file-lock beside the DB ensures only one refreshes per cycle.
+      POI_STORE_PATH: /app/state/poi.sqlite
+      POI_REFRESH_INTERVAL_HOURS: "24"
     volumes:
       # The volume mounts at /app/state — NOT /app/data — so the read-only
       # JSON catalogs baked into the image at /app/data stay visible. The
@@ -90,6 +95,9 @@ services:
       PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
       PHOENIX_PROJECT_NAME: ${PHOENIX_PROJECT_NAME:-smcity}
       OTEL_RESOURCE_ATTRIBUTES: "service.instance.id=green"
+      # See the blue replica for why both share /app/state/poi.sqlite.
+      POI_STORE_PATH: /app/state/poi.sqlite
+      POI_REFRESH_INTERVAL_HOURS: "24"
     volumes:
       # The volume mounts at /app/state — NOT /app/data — so the read-only
       # JSON catalogs baked into the image at /app/data stay visible. The

@@ -79,8 +79,21 @@ class TurnResponse(BaseModel):
     elapsed_ms: int
 
 
+class PoiMirrorHealth(BaseModel):
+    """Freshness of the local OSM POI mirror (geo.find_poi)."""
+
+    enabled: bool  # is the mirror queried before live Overpass?
+    categories_populated: int  # of the 30 categories, how many have been refreshed
+    categories_total: int
+    total_pois: int
+    oldest_refresh: str | None = None  # ISO-8601 UTC — the staleness floor
+    newest_refresh: str | None = None
+    stale: bool = False  # oldest refresh older than 2x the refresh interval
+
+
 class Health(BaseModel):
     status: Literal["ok", "degraded", "down"]
     llm_reachable: bool
     llm_model: str
     version: str
+    poi_mirror: PoiMirrorHealth | None = None
