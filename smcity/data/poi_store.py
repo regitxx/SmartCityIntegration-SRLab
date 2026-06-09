@@ -158,14 +158,10 @@ class PoiStore:
             # no category column, so collect the rowids first.
             old_ids = [
                 r["rowid"]
-                for r in conn.execute(
-                    "SELECT rowid FROM pois WHERE category = ?", (category,)
-                )
+                for r in conn.execute("SELECT rowid FROM pois WHERE category = ?", (category,))
             ]
             conn.execute("DELETE FROM pois WHERE category = ?", (category,))
-            conn.executemany(
-                "DELETE FROM pois_rtree WHERE rowid = ?", [(i,) for i in old_ids]
-            )
+            conn.executemany("DELETE FROM pois_rtree WHERE rowid = ?", [(i,) for i in old_ids])
 
             for poi in rows:
                 lat = float(poi["lat"])

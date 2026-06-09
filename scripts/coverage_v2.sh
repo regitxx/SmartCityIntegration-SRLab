@@ -4,7 +4,7 @@
 # One command end-to-end on the Mac Studio host:
 #   1. Generate 10 000 questions stratified over en / yue / zh-Hant / zh-Hans
 #      via Gemma 4 (`gemma-synth` in LM Studio).
-#   2. Drive them through the deployed agent at https://smcity.taila366aa.ts.net.
+#   2. Drive them through the deployed agent at https://smcity-1.taila366aa.ts.net.
 #   3. Build the markdown + JSON report using the new contract-based judge.
 #   4. Copy the JSON summary into /app/state (read by /coverage live).
 #
@@ -25,7 +25,7 @@ cd "$(dirname "$0")/.."
 COUNT="10000"
 LANGUAGES="en,yue,zh-Hant,zh-Hans"
 CONCURRENCY="4"
-AGENT_URL="https://smcity.taila366aa.ts.net"
+AGENT_URL="https://smcity-1.taila366aa.ts.net"
 LM_BASE_URL="http://host.docker.internal:1234/v1"
 QUESTIONS="logs/coverage_questions_v2.jsonl"
 RESULTS="logs/coverage_results_v2.jsonl"

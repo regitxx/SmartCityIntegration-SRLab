@@ -108,9 +108,7 @@ async def test_geocode_one_falls_through_to_nominatim() -> None:
         respx.mock(base_url="https://nominatim.openstreetmap.org") as n,
         respx.mock(base_url=ALS_URL.rsplit("/", 1)[0], assert_all_called=False) as a,
     ):
-        nom_route = n.get("/search").mock(
-            return_value=httpx.Response(200, json=nominatim_sample)
-        )
+        nom_route = n.get("/search").mock(return_value=httpx.Response(200, json=nominatim_sample))
         als_route = a.get("/lookup").mock(return_value=httpx.Response(500))
         coords = await _geocode_one("City University of Hong Kong")
     assert nom_route.called, "Nominatim must be called for non-station free-text"
@@ -308,7 +306,7 @@ async def test_plan_journey_collision_guard_triggers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_meta_forget_me_clears_session(tmp_path) -> None:  # type: ignore[no-untyped-def]
+async def test_meta_forget_me_clears_session(tmp_path) -> None:
     from smcity.session import SessionStore
     from smcity.slots import LocationSlot, SessionSlots
     from smcity.tools import meta as meta_mod

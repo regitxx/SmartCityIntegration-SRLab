@@ -58,7 +58,9 @@ def _topic_from_row(row: dict[str, Any]) -> DatasetTopic:
     """
     return DatasetTopic(
         id=str(row.get("expected_dataset_id") or "unknown"),
-        title_en=str(row.get("expected_dataset_title") or row.get("expected_dataset_id") or "unknown"),
+        title_en=str(
+            row.get("expected_dataset_title") or row.get("expected_dataset_id") or "unknown"
+        ),
         title_tc="",
         expected_tools=tuple(row.get("expected_tools") or ()),
         description_en=(
@@ -206,7 +208,7 @@ async def run(
                 eta_s = (len(pending) - processed) / max(rate, 0.001)
                 print(
                     f"\r[coverage_judge] {processed}/{len(pending)} "
-                    f"({rate:.2f} q/s, ETA {eta_s/60:.1f} min)            ",
+                    f"({rate:.2f} q/s, ETA {eta_s / 60:.1f} min)            ",
                     end="",
                     file=sys.stderr,
                     flush=True,
@@ -227,9 +229,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--concurrency", type=int, default=2)
     parser.add_argument("--timeout-s", type=float, default=60.0)
-    parser.add_argument(
-        "--limit", type=int, default=None, help="Cap the number of rows judged."
-    )
+    parser.add_argument("--limit", type=int, default=None, help="Cap the number of rows judged.")
     args = parser.parse_args(list(argv) if argv is not None else None)
     judged, total = asyncio.run(
         run(

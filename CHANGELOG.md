@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented here. Versions follow [SemVer](https://semver.org/).
 
+## [0.8.1] — 2026-06-09
+
+**Bounded retry/backoff for the POI mirror refresh — so a cold deploy actually fills.** The v0.8.0 deploy surfaced a gap the unit tests didn't: on a *cold* deploy the in-process warm-up fires all 30 categories at `overpass-api.de`'s free endpoint in quick succession, and it 429-rate-limits (with intermittent 504s) on roughly half of them. `refresh_all` logged each failure and moved on — so the mirror landed only ~14/30 categories and stayed that way until the next nightly cycle, silently falling back to live Overpass for the gaps (re-introducing the latency + flakiness the mirror exists to remove). Reaching 30/30 on the v0.8.0 production deploy required manual paced + targeted-retry runs.
+
+### Fix
+
+`smcity/data/poi_refresh.py` gains `refresh_category_with_retry`, which `refresh_all` now uses per category:
+
+- Retries only on **transient** failures — 429, 5xx, and timeout/network errors — detected structurally via the chained `httpx` error on `exc.__cause__` (`HTTPStatusError.response.status_code` / `RequestError`), **not** by string-matching the message. A non-transient error (e.g. a malformed-query 400) re-raises immediately rather than wasting retries on something that will fail identically.
+- Backoff is `Retry-After` when the server provides it, else exponential (`poi_refresh_backoff_base_s · 2^attempt`, capped at 60s, with jitter so the two replicas don't resync in lockstep).
+- On exhaustion the last error still propagates to `refresh_all`'s per-category guard, which logs `poi_refresh.category_failed` and keeps sweeping — a single dead category never aborts the rebuild (unchanged contract).
+
+The retry lives in the **background refresh only**, never on the live `find_poi` fallback — a user turn must not block on a 60s backoff.
+
+### Config
+
+Two new settings (`smcity/settings.py`): `poi_refresh_max_retries` (default 4, set 0 to disable) and `poi_refresh_backoff_base_s` (default 5.0s). The per-category throttle default is unchanged at 2s — the retry/backoff is the robustness mechanism; tuning the base throttle is a separate, empirical question best answered with a measured cold-deploy.
+
+### Also
+
+- **Stale Tailscale hostname fixed repo-wide.** The deployed node is `smcity-1.taila366aa.ts.net` (Tailscale appended `-1`; the bare `smcity` name was taken), but `deploy/README.md`, `scripts/coverage_v2.sh`, and — more importantly — the `--agent-url` **defaults** in `smcity_fuzz/coverage_run.py` and `smcity_fuzz/cli.py` all pointed at the dead `smcity.` host. The code defaults would silently make a no-flag sweep time out. (Historical CHANGELOG entries left as-is.)
+- **`docs/TEST_CASES.md` refreshed:** added a calibration scoreboard (v0.7.0 → v0.8.0 trend + reproduce-the-sweep command with the correct host and `FUZZER_MODEL` pin baked in); removed the stale `transport.plan_taxi_estimate` row and the "+ taxi" in `plan_journey`'s description (taxi was removed from the planner in v0.4.12 — the code was already correct; only the doc lagged).
+
+### Tests
+
+6 new (`tests/test_poi_store.py`): retry-then-succeed, give-up-after-max-retries, no-retry-on-400, retry-on-timeout, `Retry-After` honored, and `refresh_all` skips an exhausted category while still populating the other 29. 405 pass (7 integration tests deselected off-Tailscale); ruff + mypy strict clean.
+
 ## [0.8.0] — 2026-06-05
 
 **A local POI mirror, so `find_poi` stops hitting public Overpass on every turn.** `geo.find_poi` previously POSTed to `overpass-api.de` for every request. That endpoint is slow and intermittently 504s — a latency source *and* a measurement confounder (a 504 surfaces as a `tool_error` that has nothing to do with the model, which muddied the v0.7.1 calibration). This release adds a nightly SQLite mirror and queries it first.
@@ -25,6 +52,26 @@ The refresh does **not** re-implement tag derivation or element parsing. It call
 - The nightly refresh offloads its SQLite writes to a worker thread (`asyncio.to_thread`), so a large category's insert can't block the event loop and spike latency for users on the replica doing the refresh — most visible during the startup warm-up right after a deploy.
 - WAL on the shared volume across both replicas is the same pattern `SessionStore` already runs in production, so the concurrency story is proven, not new.
 - 15 new tests (`tests/test_poi_store.py`): store round-trip / bbox / limit, zero-row freshness, parse parity, local-first-no-network, cold fallback, A/B isolation, the full 30-category sweep, and the cross-replica lock.
+
+### Measurement — calibrated 200-row sweep
+
+Ran the calibrated `coverage_run → coverage_judge` against the deployed v0.8.0 — same fixed corpus (`data/synth/v0.6.0_20260526_sample200_calibration.jsonl`), 200 rows, concurrency 1, judged with `gpt-oss-120b` as sole no-TTL model — identical methodology to the v0.7.1 baseline. Judged file: `logs/coverage_judged_v0.8.0_sample200.jsonl`. (The judge model must be pinned with `FUZZER_MODEL=openai/gpt-oss-120b`; the harness default is `gpt-oss-20b`, which would break baseline parity. The metric formulas were re-validated by reproducing v0.7.0's published numbers exactly.)
+
+| metric | v0.7.0 | v0.7.1 | v0.8.0 |
+|---|---:|---:|---:|
+| `tool_error`/100 | 4.5 | 27.0 | **4.0** |
+| `wrong_tool`/100 | 39.5 | 30.0 | **26.0** |
+| pass rate | 33.5% | 28.0% | **45.5%** |
+| avg score /10 | 5.72 | 5.88 | **6.99** |
+| latency median | — | 11.3s | **7.1s** |
+| latency p95 | — | 24.7s | **19.2s** |
+| live Overpass calls | — | many (504-prone) | **0** |
+
+**The thesis holds by construction.** All 127 `find_poi` calls in the sweep were served by the local mirror — **zero hit live Overpass**. That collapses `tool_error` 27.0 → 4.0 (back to the v0.6.3/v0.7.0 structural floor — the residual is non-`find_poi` tools, not Overpass) and recovers pass rate 28.0% → 45.5%. This **vindicates the v0.7.1 diagnosis**: that release flagged its own 28% pass rate as "not a defect — an upstream confound" (Overpass 504s correctly routed *into* `find_poi`). Removing the confound recovered the rate, confirming routing was never the problem. Whole-turn latency also fell 37% (median 11.3s → 7.1s) since the mirror replaces a slow, variable network round-trip with a local R*Tree lookup; `wrong_tool` improved slightly (30.0 → 26.0) as more chains complete their intended tool use rather than aborting on a 504.
+
+**Honest gaps this measurement surfaces:**
+- **Latency is still the #1 unmet goal.** 7.1s median is ~5× the `GOAL.md` ≤1.5s target. The mirror did its job; the two `gpt-oss-120b` hops (decide + synthesise) now dominate the budget. The next lever is replacing the decide-120B hop with a deterministic/gemma intent classifier (target common-path ≤1.5s).
+- **Cold-deploy warm-up needs a backoff fix.** The startup refresh landed only 14/30 categories on a cold deploy — `overpass-api.de` rate-limited (429) and timed-out (504) on ~half at the default 2s throttle with no retry. 30/30 was reached only via manual paced + targeted-retry runs. A warm mirror stays warm (`replace_category` swaps only on success), but a cold deploy under-populates until a v0.8.1 adds bounded per-category retry/backoff.
 
 ## [0.7.1] — 2026-06-03
 

@@ -48,6 +48,7 @@ DATASET_COVERAGE: dict[str, set[SupportedLang]] = {
     "csdi.query_features": {"en", "zh-Hant"},
 }
 
+
 # Populate the OSM POI tool entry from the same source of truth used by
 # the registry. Done at module-import time so DATASET_COVERAGE stays a
 # flat dict for everything downstream. v0.6.0: was 30 entries (one per

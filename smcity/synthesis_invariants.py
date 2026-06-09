@@ -322,7 +322,7 @@ def _meaningful_chars(text: str) -> str:
     return "".join(
         c
         for c in text
-        if not c.isspace() and not c.isdigit() and c not in '.,;:!?()[]{}<>"\'-_+=*/\\|&^%$#@~`'
+        if not c.isspace() and not c.isdigit() and c not in ".,;:!?()[]{}<>\"'-_+=*/\\|&^%$#@~`"
     )
 
 
@@ -389,8 +389,7 @@ def _wrong_language_check(
         return None  # nothing meaningful to grade
 
     user_expects_cjk = (
-        detection.primary_lang in _CJK_SCRIPT_USERS
-        or detection.script in _CJK_SCRIPT_CODES
+        detection.primary_lang in _CJK_SCRIPT_USERS or detection.script in _CJK_SCRIPT_CODES
     )
 
     latin_dominant = latin_ratio >= _SCRIPT_DOMINANT_RATIO

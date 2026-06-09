@@ -4,7 +4,7 @@
 
 **Access:**
 - Local: <http://127.0.0.1:8080>
-- Tailnet: <http://macbook-pro.tail87b6dc.ts.net:8080> or <http://100.125.129.88:8080>
+- Tailnet (production): <https://smcity-1.taila366aa.ts.net> — tailnet-only, TLS terminated by the Tailscale sidecar
 
 **Prereq:** LM Studio on the Mac Studio must be online with `openai/gpt-oss-120b` loaded. Verify: `curl http://127.0.0.1:8080/health` — `llm_reachable` must be `true`.
 
@@ -12,7 +12,24 @@ All queries listed in both **English** and **Cantonese (繁體)** where natural.
 
 ---
 
-## Transport (13 tools)
+## Calibration scoreboard
+
+Headline metrics from the calibrated 200-row sweep (fixed corpus `data/synth/v0.6.0_20260526_sample200_calibration.jsonl`, concurrency 1, judged with `gpt-oss-120b`). Lower is better for `tool_error`/`wrong_tool`/latency; higher for pass rate and score. Full per-release write-ups live in `CHANGELOG.md`.
+
+| metric | v0.7.0 | v0.7.1 | v0.8.0 | target |
+|---|---:|---:|---:|---:|
+| pass rate | 33.5% | 28.0% | **45.5%** | → higher |
+| avg score /10 | 5.72 | 5.88 | **6.99** | → higher |
+| `wrong_tool`/100 | 39.5 | 30.0 | **26.0** | → 0 |
+| `tool_error`/100 | 4.5 | 27.0 | **4.0** | → 0 |
+| latency median | — | 11.3s | **7.1s** | **≤1.5s** (`GOAL.md`) |
+| latency p95 | — | 24.7s | **19.2s** | — |
+
+**v0.8.0 (local POI mirror):** removed the live-Overpass 504 confound (0 Overpass calls in the sweep; all 127 `find_poi` served from the mirror), collapsing `tool_error` 27→4 and recovering pass rate to 45.5%. **Latency is the remaining gap** — 7.1s median is ~5× the ≤1.5s goal; the two `gpt-oss-120b` hops (decide + synthesise) now dominate. To reproduce: `FUZZER_MODEL=openai/gpt-oss-120b uv run python -m smcity_fuzz coverage run --questions data/synth/v0.6.0_20260526_sample200_calibration.jsonl --agent-url https://smcity-1.taila366aa.ts.net --concurrency 1 --out logs/coverage_results_<ver>.jsonl` then `… coverage_judge --results … --out …`.
+
+---
+
+## Transport (12 tools)
 
 | Tool | Try this query | Upstream API hit live |
 |---|---|---|
@@ -26,8 +43,7 @@ All queries listed in both **English** and **Cantonese (繁體)** where natural.
 | `transport.find_stops_by_name` | "Find all stops named Sheung Wan" / "搵下叫『上環』嘅站" | (local catalog + KMB stop API) |
 | `transport.plan_simple_route` | "MTR from Sheung Wan to Sha Tin" / "搭 MTR 由上環去沙田" | local Dijkstra over MTR topology |
 | `transport.plan_walking_route` | "Walk from Central to Wan Chai" / "由中環行去灣仔" | (local pace model + ALS for geocoding) |
-| `transport.plan_taxi_estimate` | "Taxi fare Central to Sha Tin" / "中環坐的士去沙田大約幾錢？" | (HK 2026 tariff model) |
-| `transport.plan_journey` | "How do I get from Tsim Sha Tsui to Causeway Bay?" / "由尖沙咀去銅鑼灣點去？" | composes walk + MTR + taxi |
+| `transport.plan_journey` | "How do I get from Tsim Sha Tsui to Causeway Bay?" / "由尖沙咀去銅鑼灣點去？" | composes walk + MTR (no taxi — transit/walk only) |
 | `transport.plan_multimodal_journey` | "Multimodal route Central → Sha Tin via bus + MTR" — **needs OTP2 sidecar running**, see `otp/README.md` | local OTP2 docker sidecar |
 
 ## Context — weather / air / warnings (4 tools)

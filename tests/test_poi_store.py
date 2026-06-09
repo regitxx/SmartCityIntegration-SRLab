@@ -12,6 +12,7 @@ Covers four contracts:
 
 from __future__ import annotations
 
+from contextlib import suppress
 from datetime import UTC, datetime
 
 import httpx
@@ -26,6 +27,7 @@ from smcity.tools.osm_pois import (
     SOURCE_MIRROR,
     FindPoiArgs,
     OsmPoi,
+    _build_query,
     _find_poi_handler,
     _parse_overpass_elements,
 )
@@ -74,9 +76,7 @@ def _set(monkeypatch: pytest.MonkeyPatch, **env: str) -> None:
 def test_store_roundtrip_and_bbox_filter(tmp_path) -> None:
     store = PoiStore(tmp_path / "poi.sqlite")
     pois = _parse_overpass_elements(_SAMPLE)
-    written = store.replace_category(
-        "convenience_store", [p.model_dump() for p in pois], _now()
-    )
+    written = store.replace_category("convenience_store", [p.model_dump() for p in pois], _now())
     assert written == 2
 
     # Inside HK bbox -> both returned.
@@ -304,3 +304,178 @@ async def test_refresh_skips_when_another_replica_holds_lock(
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+# --- 6. refresh retry/backoff (v0.8.1) ------------------------------------
+#
+# A cold-deploy warm-up 429s on ~half the categories; without retries they stay
+# empty until the next nightly cycle. These lock the retry contract: transient
+# failures (429 / 5xx / timeout) retry with backoff, non-transient ones don't,
+# Retry-After is honored, and an exhausted category never aborts the sweep.
+
+
+def _overpass_http_error(status: int, retry_after: str | None = None) -> Exception:
+    """Build the exact exception shape `fetch_overpass` raises: a wrapper whose
+    `__cause__` is the httpx.HTTPStatusError carrying the response/status."""
+    req = httpx.Request("POST", OVERPASS_URL)
+    headers = {"Retry-After": retry_after} if retry_after is not None else {}
+    resp = httpx.Response(status, request=req, headers=headers)
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        err = RuntimeError(f"Overpass API failed: {exc}")
+        err.__cause__ = exc
+        return err
+    raise AssertionError("status should have raised")  # pragma: no cover
+
+
+def _overpass_timeout() -> Exception:
+    exc = httpx.ConnectTimeout("timed out")
+    err = RuntimeError(f"Overpass API failed: {exc}")
+    err.__cause__ = exc
+    return err
+
+
+def _sequenced_fetch(outcomes: list):
+    """Async fetch stub: each call consumes the next outcome ("ok" → `_SAMPLE`,
+    else an Exception to raise). The last outcome repeats once exhausted."""
+    seq = iter(outcomes)
+    last: dict = {"v": outcomes[-1]}
+
+    async def _fetch(_query: str) -> dict:
+        with suppress(StopIteration):
+            last["v"] = next(seq)
+        outcome = last["v"]
+        if outcome == "ok":
+            return _SAMPLE
+        raise outcome
+
+    return _fetch
+
+
+@pytest.fixture
+def slept(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Record backoff delays without actually sleeping."""
+    recorded: list = []
+
+    async def _fake_sleep(delay: float) -> None:
+        recorded.append(delay)
+
+    monkeypatch.setattr("asyncio.sleep", _fake_sleep)
+    return recorded
+
+
+@pytest.mark.asyncio
+async def test_refresh_category_retries_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch, slept: list
+) -> None:
+    from smcity.data import poi_refresh
+
+    fetch = _sequenced_fetch([_overpass_http_error(429), _overpass_http_error(429), "ok"])
+    monkeypatch.setattr(poi_refresh, "fetch_overpass", fetch)
+    store = get_poi_store()
+
+    count = await poi_refresh.refresh_category_with_retry(
+        store, "convenience_store", max_retries=4, backoff_base_s=1.0
+    )
+    assert count == 2  # eventually populated
+    assert len(slept) == 2  # two retries before the success
+
+
+@pytest.mark.asyncio
+async def test_refresh_category_gives_up_after_max_retries(
+    monkeypatch: pytest.MonkeyPatch, slept: list
+) -> None:
+    from smcity.data import poi_refresh
+
+    fetch = _sequenced_fetch([_overpass_http_error(504)])  # always 504
+    monkeypatch.setattr(poi_refresh, "fetch_overpass", fetch)
+    store = get_poi_store()
+
+    with pytest.raises(RuntimeError):
+        await poi_refresh.refresh_category_with_retry(
+            store, "supermarket", max_retries=2, backoff_base_s=1.0
+        )
+    assert len(slept) == 2  # exactly max_retries backoffs, then re-raise
+
+
+@pytest.mark.asyncio
+async def test_refresh_category_does_not_retry_non_retryable(
+    monkeypatch: pytest.MonkeyPatch, slept: list
+) -> None:
+    from smcity.data import poi_refresh
+
+    # A 400 (malformed query) would fail identically forever — must not retry.
+    fetch = _sequenced_fetch([_overpass_http_error(400), "ok"])
+    monkeypatch.setattr(poi_refresh, "fetch_overpass", fetch)
+    store = get_poi_store()
+
+    with pytest.raises(RuntimeError):
+        await poi_refresh.refresh_category_with_retry(
+            store, "bookstore", max_retries=4, backoff_base_s=1.0
+        )
+    assert slept == []  # gave up immediately
+
+
+@pytest.mark.asyncio
+async def test_refresh_category_retries_on_timeout(
+    monkeypatch: pytest.MonkeyPatch, slept: list
+) -> None:
+    from smcity.data import poi_refresh
+
+    fetch = _sequenced_fetch([_overpass_timeout(), "ok"])
+    monkeypatch.setattr(poi_refresh, "fetch_overpass", fetch)
+    store = get_poi_store()
+
+    count = await poi_refresh.refresh_category_with_retry(
+        store, "dentist", max_retries=4, backoff_base_s=1.0
+    )
+    assert count == 2
+    assert len(slept) == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_category_honors_retry_after(
+    monkeypatch: pytest.MonkeyPatch, slept: list
+) -> None:
+    from smcity.data import poi_refresh
+
+    fetch = _sequenced_fetch([_overpass_http_error(429, retry_after="7"), "ok"])
+    monkeypatch.setattr(poi_refresh, "fetch_overpass", fetch)
+    store = get_poi_store()
+
+    await poi_refresh.refresh_category_with_retry(
+        store, "marketplace", max_retries=4, backoff_base_s=1.0
+    )
+    assert slept == [7.0]  # Retry-After took precedence over computed backoff
+
+
+@pytest.mark.asyncio
+async def test_refresh_all_skips_category_that_exhausts_retries(
+    monkeypatch: pytest.MonkeyPatch, slept: list
+) -> None:
+    """One category 429s forever; the sweep retries it, gives up, and still
+    populates every other category instead of aborting."""
+    from smcity.data import poi_refresh
+    from smcity.tools.poi_categories import CATEGORIES
+
+    doomed = next(iter(CATEGORIES))
+
+    doomed_query = _build_query(doomed, _HK_BBOX)
+
+    async def _fetch(query: str) -> dict:
+        # _build_query embeds the category's OSM tags; the first category's
+        # query is the only one that always fails.
+        if query == doomed_query:
+            raise _overpass_http_error(429)
+        return _SAMPLE
+
+    monkeypatch.setattr(poi_refresh, "fetch_overpass", _fetch)
+    _set(monkeypatch, POI_REFRESH_MAX_RETRIES="1")
+    store = get_poi_store()
+
+    results = await poi_refresh.refresh_all(store, throttle_s=0.0)
+
+    assert doomed not in results  # gave up on the doomed category
+    assert len(results) == 29  # every other category populated
+    assert store.freshness().categories_populated == 29

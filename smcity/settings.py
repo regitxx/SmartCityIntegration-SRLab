@@ -81,6 +81,28 @@ class Settings(BaseSettings):
         le=30.0,
         description="Pause between per-category Overpass queries during refresh.",
     )
+    poi_refresh_max_retries: int = Field(
+        default=4,
+        ge=0,
+        le=10,
+        description=(
+            "Retries per category on a TRANSIENT Overpass failure (429 rate-limit, "
+            "5xx, or timeout) during a refresh. A cold-deploy warm-up hammers "
+            "overpass-api.de's free endpoint, which 429s on ~half the categories at "
+            "the default throttle; without retries those categories stay empty until "
+            "the next nightly cycle. 0 disables retries."
+        ),
+    )
+    poi_refresh_backoff_base_s: float = Field(
+        default=5.0,
+        ge=0.5,
+        le=60.0,
+        description=(
+            "Base delay for the per-category retry backoff. Doubles each attempt "
+            "(exponential), capped at 60s with a little jitter; a Retry-After header "
+            "on the response takes precedence when present."
+        ),
+    )
 
 
 @cache

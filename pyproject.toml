@@ -1,6 +1,6 @@
 [project]
 name = "smcity"
-version = "0.8.0"
+version = "0.8.1"
 description = "HK Smart City agentic chat for the Lab of Social Robotics"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -67,6 +67,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "PLR2004"]
 "scripts/**" = ["S"]
+# Reply-signal regexes deliberately match CJK punctuation (e.g. fullwidth comma).
+"smcity_fuzz/contracts.py" = ["RUF001"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -83,7 +85,13 @@ exclude = ["web/", "build/"]
 
 [[tool.mypy.overrides]]
 module = ["tests.*"]
+# Test code is exercised by pytest, not shipped — exempt it from the strict
+# typing flags that only add ceremony (untyped fixtures, bare dict/list in
+# helpers, accessing a module's private members under test).
 disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_any_generics = false
+implicit_reexport = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
