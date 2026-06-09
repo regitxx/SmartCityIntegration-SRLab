@@ -61,8 +61,7 @@ def test_engine_returns_none_on_empty_reply() -> None:
 
 def test_engine_returns_none_on_whitespace_only_reply() -> None:
     assert (
-        apply_invariants("   \n  ", [_ok("geo.find_poi", _poi_result("Dr Chan"))], _det())
-        is None
+        apply_invariants("   \n  ", [_ok("geo.find_poi", _poi_result("Dr Chan"))], _det()) is None
     )
 
 

@@ -140,6 +140,7 @@ _POI_SHAPE_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+
 def _poi_question_predicate(text: str) -> bool:
     """True for any text that smells POI-shaped — either by question shape
     ('nearest', '附近', 'where is') or by naming a known POI category.

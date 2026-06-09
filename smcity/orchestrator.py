@@ -228,9 +228,7 @@ class Orchestrator:
         messages = self._build_messages(safe_text, detection, forced, slots, include_tools=True)
 
         try:
-            with get_tracer("smcity.orchestrator").start_as_current_span(
-                "llm.chat.decide"
-            ):
+            with get_tracer("smcity.orchestrator").start_as_current_span("llm.chat.decide"):
                 first = await chat(
                     messages,
                     tools=self._registry.openai_schemas(),
@@ -315,13 +313,8 @@ class Orchestrator:
                     # same gate, apply deterministic rectification (when we
                     # have a rectification path for this gate kind).
                     retry_violation = apply_gates(retry.tool_calls)
-                    if (
-                        retry_violation is not None
-                        and retry_violation.kind == gate_violation.kind
-                    ):
-                        rectified = _rectify(
-                            retry_violation, retry.tool_calls, safe_text
-                        )
+                    if retry_violation is not None and retry_violation.kind == gate_violation.kind:
+                        rectified = _rectify(retry_violation, retry.tool_calls, safe_text)
                         if rectified is not None:
                             _emit(
                                 TurnEvent(

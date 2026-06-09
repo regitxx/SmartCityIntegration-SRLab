@@ -61,9 +61,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 _log = structlog.get_logger(__name__)
 
 # Quiet OTEL's own logging — it's verbose under normal operation.
-logging.getLogger("opentelemetry.exporter.otlp.proto.http.trace_exporter").setLevel(
-    logging.WARNING
-)
+logging.getLogger("opentelemetry.exporter.otlp.proto.http.trace_exporter").setLevel(logging.WARNING)
 
 _DEFAULT_PROJECT = "smcity"
 _PHOENIX_TRACES_PATH = "/v1/traces"

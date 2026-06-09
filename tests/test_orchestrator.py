@@ -367,9 +367,7 @@ async def test_synthesis_invariant_retries_on_data_denial(
             {
                 "id": "call-find",
                 "name": "geo.find_poi",
-                "arguments": json.dumps(
-                    {"category": "dentist", "lat": 22.30, "lng": 114.17}
-                ),
+                "arguments": json.dumps({"category": "dentist", "lat": 22.30, "lng": 114.17}),
             }
         ],
         usage={},
@@ -494,9 +492,7 @@ async def test_gate_rectifies_when_retry_still_violates_spatial_scope(
     # Sequence: first call returns bare find_poi (gate fires + re-prompts),
     # retry returns the SAME bare shape (gate fires again → rectification
     # kicks in), then the synthesis call returns the prose reply.
-    monkeypatch.setattr(
-        orch_module, "chat", _scripted_chat([bare_find_poi, bare_find_poi, synth])
-    )
+    monkeypatch.setattr(orch_module, "chat", _scripted_chat([bare_find_poi, bare_find_poi, synth]))
 
     store = SessionStore(tmp_path / "sessions.sqlite3")
     orch = Orchestrator(store)

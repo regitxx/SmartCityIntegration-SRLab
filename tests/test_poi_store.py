@@ -27,6 +27,7 @@ from smcity.tools.osm_pois import (
     SOURCE_MIRROR,
     FindPoiArgs,
     OsmPoi,
+    _build_query,
     _find_poi_handler,
     _parse_overpass_elements,
 )
@@ -75,9 +76,7 @@ def _set(monkeypatch: pytest.MonkeyPatch, **env: str) -> None:
 def test_store_roundtrip_and_bbox_filter(tmp_path) -> None:
     store = PoiStore(tmp_path / "poi.sqlite")
     pois = _parse_overpass_elements(_SAMPLE)
-    written = store.replace_category(
-        "convenience_store", [p.model_dump() for p in pois], _now()
-    )
+    written = store.replace_category("convenience_store", [p.model_dump() for p in pois], _now())
     assert written == 2
 
     # Inside HK bbox -> both returned.
@@ -462,7 +461,7 @@ async def test_refresh_all_skips_category_that_exhausts_retries(
 
     doomed = next(iter(CATEGORIES))
 
-    doomed_query = poi_refresh._build_query(doomed, poi_refresh._HK_BBOX)
+    doomed_query = _build_query(doomed, _HK_BBOX)
 
     async def _fetch(query: str) -> dict:
         # _build_query embeds the category's OSM tags; the first category's

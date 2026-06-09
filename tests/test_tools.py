@@ -170,13 +170,16 @@ def test_registry_exposes_collapsed_find_poi_only() -> None:
     registry = build_default_registry()
     names = set(registry.names())
     assert "geo.find_poi" in names
-    legacy = {f"geo.find_{slug}" for slug in (
-        "dentist",
-        "convenience_store",
-        "public_toilet",
-        "bench",
-        "mtr_station_entrance",
-    )}
+    legacy = {
+        f"geo.find_{slug}"
+        for slug in (
+            "dentist",
+            "convenience_store",
+            "public_toilet",
+            "bench",
+            "mtr_station_entrance",
+        )
+    }
     assert not (legacy & names), f"legacy POI tool names still registered: {legacy & names}"
 
 
@@ -189,9 +192,7 @@ def test_find_poi_category_literal_rejects_unknown_slug() -> None:
     from smcity.tools.osm_pois import FindPoiArgs
 
     with pytest.raises(ValidationError):
-        FindPoiArgs.model_validate(
-            {"category": "fictional_category", "lat": 22.3, "lng": 114.17}
-        )
+        FindPoiArgs.model_validate({"category": "fictional_category", "lat": 22.3, "lng": 114.17})
 
 
 def test_find_poi_category_required() -> None:

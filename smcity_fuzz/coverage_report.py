@@ -63,9 +63,7 @@ class DatasetReport:
 
 
 def analyse(results: Sequence[dict[str, Any]]) -> dict[str, DatasetReport]:
-    by_dataset: dict[str, DatasetReport] = defaultdict(
-        lambda: DatasetReport(dataset_id="")
-    )
+    by_dataset: dict[str, DatasetReport] = defaultdict(lambda: DatasetReport(dataset_id=""))
     for row in results:
         ds_id = row.get("expected_dataset_id") or "<unknown>"
         report = by_dataset[ds_id]
@@ -87,8 +85,8 @@ def analyse(results: Sequence[dict[str, Any]]) -> dict[str, DatasetReport]:
         elapsed = row.get("elapsed_ms") or 0
         # Compute rolling average without storing every elapsed.
         report.avg_elapsed_ms = (
-            (report.avg_elapsed_ms * (report.total - 1) + elapsed) / report.total
-        )
+            report.avg_elapsed_ms * (report.total - 1) + elapsed
+        ) / report.total
         for t in row.get("tool_trace") or []:
             if isinstance(t, dict) and t.get("name"):
                 report.tool_fire_counts[t["name"]] += 1
@@ -137,9 +135,7 @@ def render_markdown(
     lines.append("|---|---:|---:|")
     for bucket, count in by_bucket.most_common():
         share = count / total if total else 0
-        lines.append(
-            f"| {_FAILURE_LABELS.get(bucket, bucket)} | {count} | {share:.1%} |"
-        )
+        lines.append(f"| {_FAILURE_LABELS.get(bucket, bucket)} | {count} | {share:.1%} |")
     lines.append("")
     lines.append("## Per-dataset breakdown")
     lines.append("")

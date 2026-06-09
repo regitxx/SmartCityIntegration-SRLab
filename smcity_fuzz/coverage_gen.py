@@ -33,7 +33,7 @@ import logging
 import re
 import sys
 import uuid
-from collections.abc import Iterable
+from collections.abc import Coroutine, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -148,9 +148,7 @@ _LANG_STYLE: dict[str, str] = {
         "Formal Traditional Chinese (繁體中文), the standard written form. "
         "Polite, neutral tone — what a news article or a formal email would use."
     ),
-    "zh-Hans": (
-        "Simplified Chinese (简体中文), Mandarin written form, neutral register."
-    ),
+    "zh-Hans": ("Simplified Chinese (简体中文), Mandarin written form, neutral register."),
 }
 
 # Reference few-shot questions per language and topic family, so Gemma
@@ -299,9 +297,8 @@ async def generate(
     sem = asyncio.Semaphore(concurrency)
 
     async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
-        async def _gen_one_batch(
-            target: GenerationTarget, n: int, lang: str
-        ) -> list[str]:
+
+        async def _gen_one_batch(target: GenerationTarget, n: int, lang: str) -> list[str]:
             async with sem:
                 return await _gemma_complete(
                     client,
@@ -312,14 +309,12 @@ async def generate(
                     lang=lang,
                 )
 
-        tasks: list[tuple[GenerationTarget, str, asyncio.Future[list[str]]]] = []
+        tasks: list[tuple[GenerationTarget, str, Coroutine[Any, Any, list[str]]]] = []
         for target in targets:
             for lang in languages:
                 n_batches = (per_cell + batch_size - 1) // batch_size
                 for _ in range(n_batches):
-                    tasks.append(
-                        (target, lang, _gen_one_batch(target, batch_size, lang))
-                    )
+                    tasks.append((target, lang, _gen_one_batch(target, batch_size, lang)))
 
         with output_path.open("a", encoding="utf-8") as fh:
             for target, lang, coro in tasks:

@@ -108,9 +108,7 @@ _LITERAL_VALUES: frozenset[str] = frozenset(PoiCategory.__args__)  # type: ignor
 _CATEGORY_VALUES: frozenset[str] = frozenset(_CATEGORIES)
 if _CATEGORY_VALUES != _LITERAL_VALUES:  # pragma: no cover — startup invariant
     missing = _LITERAL_VALUES ^ _CATEGORY_VALUES
-    raise RuntimeError(
-        f"PoiCategory Literal and _CATEGORIES disagree on slugs: {sorted(missing)}"
-    )
+    raise RuntimeError(f"PoiCategory Literal and _CATEGORIES disagree on slugs: {sorted(missing)}")
 
 
 # --- argument + result schemas --------------------------------------------
@@ -211,9 +209,7 @@ def _resolve_bbox(args: FindPoiArgs) -> tuple[float, float, float, float]:
     return _HK_BBOX
 
 
-def _parse_overpass_elements(
-    data: dict[str, Any], max_results: int | None = None
-) -> list[OsmPoi]:
+def _parse_overpass_elements(data: dict[str, Any], max_results: int | None = None) -> list[OsmPoi]:
     """Turn a raw Overpass `out center` payload into `OsmPoi` rows.
 
     Single source of truth for OSM-element -> POI shaping, used by BOTH the live
@@ -308,9 +304,7 @@ async def _find_poi_handler(args: FindPoiArgs, _ctx: ToolContext) -> FindPoiResu
         try:
             populated = await asyncio.to_thread(store.is_populated, args.category)
             if populated:
-                rows = await asyncio.to_thread(
-                    store.query, args.category, bbox, args.max_results
-                )
+                rows = await asyncio.to_thread(store.query, args.category, bbox, args.max_results)
                 pois = [OsmPoi(**row) for row in rows]
                 return FindPoiResult(
                     category=args.category,
@@ -325,14 +319,10 @@ async def _find_poi_handler(args: FindPoiArgs, _ctx: ToolContext) -> FindPoiResu
     if not settings.poi_overpass_fallback:
         # A/B isolation mode: no mirror hit and fallback disabled -> empty result
         # (an honest "mirror has nothing", not a live call that masks the gap).
-        return FindPoiResult(
-            category=args.category, bbox_used=bbox, pois=[], source=SOURCE_MIRROR
-        )
+        return FindPoiResult(category=args.category, bbox_used=bbox, pois=[], source=SOURCE_MIRROR)
 
     pois = await _find_poi_live(args.category, bbox, args.max_results)
-    return FindPoiResult(
-        category=args.category, bbox_used=bbox, pois=pois, source=SOURCE_LIVE
-    )
+    return FindPoiResult(category=args.category, bbox_used=bbox, pois=pois, source=SOURCE_LIVE)
 
 
 # --- the single ToolSpec --------------------------------------------------

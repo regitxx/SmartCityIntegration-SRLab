@@ -202,12 +202,11 @@ async def run(
     started_at = time.perf_counter()
 
     async with httpx.AsyncClient() as client:
+
         async def _worker(q: dict[str, Any]) -> None:
             nonlocal processed
             async with sem:
-                row = await _post_turn(
-                    client, agent_url=agent_url, question=q, timeout_s=timeout_s
-                )
+                row = await _post_turn(client, agent_url=agent_url, question=q, timeout_s=timeout_s)
             async with write_lock:
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
                 fh.flush()
@@ -217,7 +216,7 @@ async def run(
                 eta_s = (len(pending) - processed) / max(rate, 0.001)
                 print(
                     f"\r[coverage_run] {processed}/{len(pending)} "
-                    f"({rate:.2f} q/s, ETA {eta_s/60:.1f} min)            ",
+                    f"({rate:.2f} q/s, ETA {eta_s / 60:.1f} min)            ",
                     end="",
                     file=sys.stderr,
                     flush=True,

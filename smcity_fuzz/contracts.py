@@ -78,7 +78,9 @@ AGENT_FAILURE_BUCKETS: frozenset[str] = frozenset(
 
 
 def _fired_tool_names(row: dict[str, Any]) -> list[str]:
-    return [t["name"] for t in (row.get("tool_trace") or []) if isinstance(t, dict) and t.get("name")]
+    return [
+        t["name"] for t in (row.get("tool_trace") or []) if isinstance(t, dict) and t.get("name")
+    ]
 
 
 def _ok_tool_names(row: dict[str, Any]) -> list[str]:
@@ -199,9 +201,7 @@ def _poi_chain_contract(expected_category: str) -> ContractFn:
     return check
 
 
-def _any_of_contract(
-    *, accept: tuple[str, ...], signal: Callable[[str], bool]
-) -> ContractFn:
+def _any_of_contract(*, accept: tuple[str, ...], signal: Callable[[str], bool]) -> ContractFn:
     """Success = at least one of `accept` fired (status=ok) and the reply has the expected signal.
 
     Used for transport ETAs (any of KMB/Citybus/GMB), weather + warnings,
@@ -261,7 +261,9 @@ def _eta_signal(reply: str) -> bool:
     # ETA replies should mention minutes or station/route numbers.
     if not reply or _NEGATIVE_REPLY.search(reply):
         return False
-    return bool(re.search(r"(\d+\s*(min|分鐘|分|mins?)|route\s*\d+|路線?\s*\d+)", reply, re.IGNORECASE))
+    return bool(
+        re.search(r"(\d+\s*(min|分鐘|分|mins?)|route\s*\d+|路線?\s*\d+)", reply, re.IGNORECASE)
+    )
 
 
 def _journey_signal(reply: str) -> bool:
@@ -293,13 +295,17 @@ def _aqhi_signal(reply: str) -> bool:
 def _facility_signal(reply: str) -> bool:
     if not reply or _NEGATIVE_REPLY.search(reply):
         return False
-    return bool(re.search(r"(court|球場|pool|泳池|venue|場館|free|免費|booking|預訂)", reply, re.IGNORECASE))
+    return bool(
+        re.search(r"(court|球場|pool|泳池|venue|場館|free|免費|booking|預訂)", reply, re.IGNORECASE)
+    )
 
 
 def _housing_signal(reply: str) -> bool:
     if not reply or _NEGATIVE_REPLY.search(reply):
         return False
-    return bool(re.search(r"(estate|邨|苑|HKHA|公屋|居屋|district|區|address)", reply, re.IGNORECASE))
+    return bool(
+        re.search(r"(estate|邨|苑|HKHA|公屋|居屋|district|區|address)", reply, re.IGNORECASE)
+    )
 
 
 def _address_signal(reply: str) -> bool:
@@ -336,7 +342,9 @@ CONTRACTS: dict[str, ContractFn] = {
     "S507": _any_of_contract(accept=_JOURNEY_TOOLS, signal=_journey_signal),
     "S512": _single_tool_contract("csdi.query_features", signal=_journey_signal),
     # Additional integrations (auto-id slug pattern is "X-<first20chars-of-title>")
-    "X-MTR_Real-time_Next_T": _single_tool_contract("transport.get_mtr_next_trains", signal=_eta_signal),
+    "X-MTR_Real-time_Next_T": _single_tool_contract(
+        "transport.get_mtr_next_trains", signal=_eta_signal
+    ),
     "X-KMB_/_LWB_Bus_Real-t": _any_of_contract(
         accept=(
             "transport.get_kmb_eta_by_stop",
@@ -357,7 +365,11 @@ CONTRACTS: dict[str, ContractFn] = {
     "X-Address_Lookup_(ALS)": _single_tool_contract("geo.address_lookup", signal=_address_signal),
     "X-OSM_Nominatim_(HK_vi": _no_contract("Nominatim is internal fallback only, no public tool"),
     "X-Current_Weather_+_9-": _any_of_contract(
-        accept=("context.get_current_weather", "context.get_active_warnings", "context.get_9day_forecast"),
+        accept=(
+            "context.get_current_weather",
+            "context.get_active_warnings",
+            "context.get_9day_forecast",
+        ),
         signal=_weather_signal,
     ),
     "X-Air_Quality_Health_I": _single_tool_contract("context.get_aqhi", signal=_aqhi_signal),
@@ -372,7 +384,7 @@ CONTRACTS: dict[str, ContractFn] = {
     "X-Generic_CSDI_Feature": _single_tool_contract("csdi.query_features", signal=_address_signal),
     "X-Meta_/_session_contr": _any_of_contract(
         accept=("meta.ask_user", "meta.forget_me", "meta.what_languages_are_supported"),
-        signal=lambda r: bool(r),
+        signal=bool,
     ),
 }
 
