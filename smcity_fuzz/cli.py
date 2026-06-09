@@ -302,7 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("--questions", type=Path, required=True)
     cr.add_argument(
         "--agent-url",
-        default="https://smcity.taila366aa.ts.net",
+        default="https://smcity-1.taila366aa.ts.net",
         help="Base URL of the running agent (tailnet HTTPS).",
     )
     cr.add_argument("--out", type=Path, required=True)

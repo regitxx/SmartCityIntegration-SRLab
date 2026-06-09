@@ -14,7 +14,7 @@ Usage::
 
     python -m smcity_fuzz coverage run \\
         --questions logs/coverage_questions_v1.jsonl \\
-        --agent-url https://smcity.taila366aa.ts.net \\
+        --agent-url https://smcity-1.taila366aa.ts.net \\
         --concurrency 4 \\
         --out logs/coverage_results_v1.jsonl
 """
@@ -237,7 +237,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--questions", type=Path, required=True)
     parser.add_argument(
         "--agent-url",
-        default="https://smcity.taila366aa.ts.net",
+        default="https://smcity-1.taila366aa.ts.net",
         help="Base URL of the running agent.",
     )
     parser.add_argument("--out", type=Path, required=True)

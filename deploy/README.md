@@ -94,8 +94,8 @@ Set `PHOENIX_DISABLE=1` in `.env` to suppress the OTLP exporter (e.g. if Phoenix
 # Through the router (internal):
 docker compose exec smcity-router wget -qO- http://localhost:8080/health
 
-# Through the Tailscale URL (public if Funnel is enabled):
-curl https://smcity.taila366aa.ts.net/health
+# Through the Tailscale URL (tailnet-only; the node is `smcity-1`, not `smcity`):
+curl https://smcity-1.taila366aa.ts.net/health
 ```
 
 Expected: `{"status":"ok","llm_reachable":true,"llm_model":"openai/gpt-oss-120b","version":"0.4.14"}`
