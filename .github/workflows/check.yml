@@ -42,6 +42,7 @@ jobs:
         run: uv run pip-audit --strict -r /tmp/smcity-reqs.txt
       - name: Install osv-scanner
         run: |
+          mkdir -p "$HOME/.local/bin"
           curl -sSfL \
             https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 \
             -o "$HOME/.local/bin/osv-scanner"
