@@ -519,3 +519,202 @@ async def test_gate_rectifies_when_retry_still_violates_spatial_scope(
     assert poi_entries and poi_entries[0].args.get("category") == "dentist"
     for t in resp.tool_trace:
         assert t.status == "ok", f"expected ok, got {t.name}={t.status}"
+
+
+# --- POI fast path (poi_fast_path_enabled) ---------------------------------
+
+
+def _als_response(*entries: tuple[str, str, float, float]) -> dict[str, Any]:
+    """Build an ALS SuggestedAddress payload: (name_en, name_tc, lat, lng)."""
+    return {
+        "SuggestedAddress": [
+            {
+                "Address": {
+                    "PremisesAddress": {
+                        "EngPremisesAddress": {
+                            "BuildingName": name_en,
+                            "EngDistrict": {"DcDistrict": "YAU TSIM MONG"},
+                        },
+                        "ChiPremisesAddress": {"BuildingName": name_tc},
+                        "GeospatialInformation": {"Latitude": str(lat), "Longitude": str(lng)},
+                    }
+                }
+            }
+            for name_en, name_tc, lat, lng in entries
+        ]
+    }
+
+
+def test_corroborated_coords_rejects_fuzzy_garbage() -> None:
+    from smcity.orchestrator import _corroborated_coords
+
+    mongkok = {
+        "candidates": [
+            {
+                "name_en": "MONGKOK BUILDING",
+                "name_tc": "旺角大廈",
+                "district": "YAU TSIM MONG",
+                "lat": 22.32,
+                "lng": 114.17,
+            },
+        ]
+    }
+    # Real place: token containment across the space difference.
+    assert _corroborated_coords("Mong Kok", mongkok) == (22.32, 114.17)
+    # Simplified input vs Traditional registry name.
+    assert _corroborated_coords("旺角", mongkok) is not None
+    # ALS fuzzy garbage: "London" → some Robinson Road premises (measured live).
+    robinson = {
+        "candidates": [
+            {
+                "name_en": "ROBINSON ROAD",
+                "name_tc": "羅便臣道",
+                "district": "CENTRAL & WESTERN",
+                "lat": 22.28,
+                "lng": 114.15,
+            },
+        ]
+    }
+    assert _corroborated_coords("London", robinson) is None
+    # Type suffix is optional: 佐敦站 corroborates against a 佐敦道 premises.
+    jordan = {
+        "candidates": [
+            {
+                "name_en": "JORDAN COURT",
+                "name_tc": "佐敦道金光大廈",
+                "district": "YAU TSIM MONG",
+                "lat": 22.30,
+                "lng": 114.17,
+            },
+        ]
+    }
+    assert _corroborated_coords("佐敦站", jordan) is not None
+    # A bare type word must never corroborate (junk extraction guard).
+    assert _corroborated_coords("站", jordan) is None
+    assert _corroborated_coords("station", jordan) is None
+    # No candidates at all (e.g. "Shibuya") → defer.
+    assert _corroborated_coords("Shibuya", {"candidates": []}) is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_poi_fast_path_skips_decide_hop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from smcity.settings import get_settings
+    from smcity.tools.geo import ALS_URL
+    from smcity.tools.osm_pois import OVERPASS_URL
+
+    monkeypatch.setenv("POI_FAST_PATH_ENABLED", "true")
+    get_settings.cache_clear()
+
+    respx.get(ALS_URL).mock(
+        return_value=httpx.Response(
+            200, json=_als_response(("MONGKOK BUILDING", "旺角大廈", 22.3209, 114.1711))
+        )
+    )
+    respx.post(OVERPASS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "elements": [
+                    {
+                        "type": "node",
+                        "id": 1,
+                        "lat": 22.3211,
+                        "lon": 114.1700,
+                        "tags": {"name": "惠康", "name:en": "Wellcome", "shop": "supermarket"},
+                    }
+                ]
+            },
+        )
+    )
+    # ONE scripted reply: the synthesis hop. If a decide hop ran it would
+    # consume this reply with include_tools and the trace below would be empty.
+    synth = LLMReply(text="旺角附近有惠康超市。", tool_calls=[], usage={}, elapsed_ms=80)
+    from smcity import orchestrator as orch_module
+
+    monkeypatch.setattr(orch_module, "chat", _scripted_chat([synth]))
+
+    store = SessionStore(tmp_path / "sessions.sqlite3")
+    orch = Orchestrator(store)
+    events: list[Any] = []
+    resp = await orch.handle_turn(
+        TurnRequest(session_id="poi-fast-1", text="旺角附近有冇超市？"), emit=events.append
+    )
+
+    start = [e for e in events if e.type == "turn.start"]
+    assert start and start[0].data["fast_path"] == "poi"
+    tool_names = [t.name for t in resp.tool_trace]
+    assert tool_names == ["geo.address_lookup", "geo.find_poi"]
+    poi_entry = resp.tool_trace[1]
+    assert poi_entry.args.get("category") == "supermarket"
+    assert poi_entry.status == "ok"
+    assert "惠康" in resp.text
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_poi_fast_path_defers_when_als_cannot_corroborate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from smcity.settings import get_settings
+    from smcity.tools.geo import ALS_URL
+
+    monkeypatch.setenv("POI_FAST_PATH_ENABLED", "true")
+    get_settings.cache_clear()
+
+    # ALS fuzzy-matches the foreign place to an unrelated HK premises.
+    respx.get(ALS_URL).mock(
+        return_value=httpx.Response(
+            200, json=_als_response(("ROBINSON ROAD HOUSE", "羅便臣道大廈", 22.28, 114.15))
+        )
+    )
+    decide = LLMReply(
+        text="Sorry — I only cover Hong Kong, so I can't search near London.",
+        tool_calls=[],
+        usage={},
+        elapsed_ms=90,
+    )
+    from smcity import orchestrator as orch_module
+
+    monkeypatch.setattr(orch_module, "chat", _scripted_chat([decide]))
+
+    store = SessionStore(tmp_path / "sessions.sqlite3")
+    orch = Orchestrator(store)
+    events: list[Any] = []
+    resp = await orch.handle_turn(
+        TurnRequest(session_id="poi-defer-1", text="any supermarkets near London?"),
+        emit=events.append,
+    )
+
+    defer = [e for e in events if e.type == "fast_path.defer"]
+    assert defer, "expected a fast_path.defer event"
+    # The full path ran: the scripted decide reply became the answer and no
+    # find_poi was dispatched against the uncorroborated coordinates.
+    assert "London" in resp.text
+    assert all(t.name != "geo.find_poi" for t in resp.tool_trace)
+
+
+@pytest.mark.asyncio
+async def test_poi_fast_path_disabled_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without the env flag the classifier hit is discarded before any tool
+    # runs — POI turns keep the full decide hop until the A/B sweep says so.
+    decide = LLMReply(text="（行緊全路徑）", tool_calls=[], usage={}, elapsed_ms=70)
+    from smcity import orchestrator as orch_module
+
+    monkeypatch.setattr(orch_module, "chat", _scripted_chat([decide]))
+
+    store = SessionStore(tmp_path / "sessions.sqlite3")
+    orch = Orchestrator(store)
+    events: list[Any] = []
+    resp = await orch.handle_turn(
+        TurnRequest(session_id="poi-gate-1", text="旺角附近有冇超市？"), emit=events.append
+    )
+
+    start = [e for e in events if e.type == "turn.start"]
+    assert start and start[0].data["fast_path"] is None
+    assert resp.tool_trace == []
+    assert resp.text == "（行緊全路徑）"

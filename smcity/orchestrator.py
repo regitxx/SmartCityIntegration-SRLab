@@ -29,8 +29,9 @@ from smcity.chain_rules import (
     ChainContinuation,
     apply_chain_rules,
 )
-from smcity.classifier import classify
+from smcity.classifier import FastPathHit, classify
 from smcity.langrouter import DATASET_COVERAGE, LangDetection, choose_query_lang, detect
+from smcity.langrouter.normalize import simplified_to_hk
 from smcity.llm import LLMError, LLMReply, chat, chat_stream
 from smcity.observability import get_tracer, set_attr_safe
 from smcity.prompts import (
@@ -48,10 +49,12 @@ from smcity.schemas import (
     TurnResponse,
 )
 from smcity.session import SessionStore, redact_pii
+from smcity.settings import get_settings
 from smcity.slots import Locale, SessionSlots
 from smcity.synthesis_invariants import apply_invariants
 from smcity.tool_call_gates import GateViolation, apply_gates
 from smcity.tools import ToolRegistry, build_default_registry
+from smcity.tools.osm_pois import POI_TOOL
 from smcity.tools.registry import ToolContext, ToolResult
 
 # --- events emitted to the WebSocket --------------------------------------
@@ -140,6 +143,8 @@ class Orchestrator:
             slots.user_location = req.user_location
 
         fast_hit = classify(safe_text) if not forced else None
+        if fast_hit and fast_hit.intent == "poi" and not get_settings().poi_fast_path_enabled:
+            fast_hit = None  # A/B gate — POI turns keep the full decide hop
 
         _emit(
             TurnEvent(
@@ -178,8 +183,21 @@ class Orchestrator:
             return response
 
         # ---- fast path: deterministic tool dispatch ----------------------
-        if fast_hit and fast_hit.tools:
-            tool_results = await self._run_parallel_named(fast_hit.tools, slots, detection, _emit)
+        poi_results: list[ToolResult] | None = None
+        if fast_hit and fast_hit.intent == "poi":
+            poi_results = await self._poi_fast_path_tools(fast_hit, slots, detection, _emit)
+            if poi_results is None:
+                # Unresolvable / uncorroborated location — the 120B path owns
+                # the ambiguity (clarify, decline, or use its own judgement).
+                _emit(TurnEvent(type="fast_path.defer", data={"intent": "poi"}))
+                fast_hit = None
+
+        if fast_hit and (fast_hit.tools or poi_results is not None):
+            tool_results = (
+                poi_results
+                if poi_results is not None
+                else await self._run_parallel_named(fast_hit.tools, slots, detection, _emit)
+            )
             self._append_trace_and_citations(tool_results, tool_trace, citations, detection)
 
             # Single streaming LLM hop to synthesise the final reply from tool data.
@@ -554,6 +572,62 @@ class Orchestrator:
             *(self._dispatch_one(name, {}, slots, detection, emit) for name in tool_names)
         )
 
+    async def _poi_fast_path_tools(
+        self,
+        hit: FastPathHit,
+        slots: SessionSlots,
+        detection: LangDetection,
+        emit: EventEmitter,
+    ) -> list[ToolResult] | None:
+        """Resolve the POI fast-path coordinates and run find_poi directly.
+
+        Returns the dispatched ToolResults for the synthesis hop, or None when
+        the turn must defer to the full LLM path: near-me query without a
+        user_location, failed lookup, or a location phrase the government
+        address registry does not corroborate (see `_corroborated_coords`).
+        Mirrors the chain-rules `address_lookup → find_poi` continuation —
+        same args — but with zero LLM decide hop.
+        """
+        results: list[ToolResult] = []
+        if hit.location_is_self:
+            loc = slots.user_location
+            if loc is None:
+                return None
+            lat, lng = loc.lat, loc.lng
+        else:
+            if not hit.location:
+                return None
+            lookup = await self._dispatch_one(
+                "geo.address_lookup",
+                {"query": hit.location, "max_results": 5},
+                slots,
+                detection,
+                emit,
+            )
+            if lookup.status != "ok":
+                return None
+            coords = _corroborated_coords(hit.location, lookup.result)
+            if coords is None:
+                return None
+            lat, lng = coords
+            results.append(lookup)
+
+        find = await self._dispatch_one(
+            POI_TOOL,
+            {
+                "category": hit.poi_category,
+                "lat": lat,
+                "lng": lng,
+                "radius_m": 800,
+                "max_results": 20,
+            },
+            slots,
+            detection,
+            emit,
+        )
+        results.append(find)
+        return results
+
     async def _dispatch_one(
         self,
         name: str,
@@ -892,6 +966,60 @@ def _rewrite_source_footer(text: str, citations: list[Citation]) -> str:
 def _localise_chitchat(canned: str, d: LangDetection) -> str:
     # Chitchat table returns a reply-per-language already; no extra logic needed.
     return canned
+
+
+# Location-TYPE words (closed-class, not place names): a premises record for
+# 佐敦站 is filed as 佐敦道-something, so the type suffix is optional in
+# corroboration — but the remaining core must still match.
+_CJK_TYPE_SUFFIX_RE = re.compile(
+    r"(?:站|碼頭|码头|公園|公园|廣場|广场|商場|商场|街市|區|区|邨|村)+$"
+)
+_EN_TYPE_WORDS = frozenset(
+    {"station", "mtr", "exit", "pier", "park", "area", "district", "region", "side"}
+)
+
+
+def _corroborated_coords(
+    phrase: str, lookup_result: dict[str, Any] | None
+) -> tuple[float, float] | None:
+    """First ALS candidate whose own name/district actually contains the phrase.
+
+    ALS fuzzy-matches aggressively ("London" → a Robinson Road premises), so
+    "no candidates" is a necessary but NOT sufficient out-of-scope test. A
+    candidate counts only when the substantive core of the extracted phrase
+    (type words like 站/"station" optional, scripts normalised) appears in the
+    candidate's name_en/district/name_tc — the government registry is the
+    gazetteer; no place list lives in code.
+    Measured 2026-06-10: "Mong Kok" → MONGKOK BUILDING ✓; "Shibuya" → 0
+    candidates ✗; "London" → ROBINSON ROAD (rejected here) ✗. Residual:
+    foreign names that are genuinely also HK premises names ("Tokyo" →
+    TOKYO TOWN) — a hole shared with the full LLM path, which trusts
+    candidates[0] the same way in chain_rules._poi_resolver.
+    """
+    candidates = (lookup_result or {}).get("candidates") or []
+    ascii_core = [
+        tok
+        for tok in re.findall(r"[a-z0-9]+", phrase.lower())
+        if len(tok) >= 2 and tok not in _EN_TYPE_WORDS
+    ]
+    cjk_core = _CJK_TYPE_SUFFIX_RE.sub(
+        "", "".join(re.findall(r"[㐀-鿿]+", simplified_to_hk(phrase)))
+    )
+    for cand in candidates:
+        lat, lng = cand.get("lat"), cand.get("lng")
+        if lat is None or lng is None:
+            continue
+        hay_ascii = re.sub(
+            r"[^a-z0-9]",
+            "",
+            f"{cand.get('name_en') or ''} {cand.get('district') or ''}".lower(),
+        )
+        hay_cjk = simplified_to_hk(cand.get("name_tc") or "")
+        ascii_ok = bool(ascii_core) and all(tok in hay_ascii for tok in ascii_core)
+        cjk_ok = len(cjk_core) >= 2 and cjk_core in hay_cjk
+        if ascii_ok or cjk_ok:
+            return float(lat), float(lng)
+    return None
 
 
 def _rectify(
