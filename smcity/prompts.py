@@ -204,9 +204,19 @@ def language_stick_reminder(d: LangDetection) -> str:
 
 
 def fast_path_synthesis_hint(intent: str, serialised_results: str, d: LangDetection) -> str:
+    # Existing intents stay byte-identical — routing cues must not change
+    # silently underneath a quality measurement (same rule as the category
+    # registry's golden test).
+    poi_extra = (
+        " List the nearest matches (up to 5) by name with street or area, "
+        "closest first; include distance when present. If nothing was found "
+        "or the tool errored, say so briefly and suggest widening the search."
+        if intent == "poi"
+        else ""
+    )
     return (
         f"FAST-PATH intent={intent!r}. Tool results:\n{serialised_results}\n\n"
         f"Reply concisely in {d.primary_lang!r} ({d.tts_locale}). Include the "
         "specific numbers and a one-line source footer. Do NOT write tool names "
-        "or JSON in the reply."
+        f"or JSON in the reply.{poi_extra}"
     )

@@ -87,26 +87,26 @@ CATEGORIES: dict[str, CategorySpec] = {
     "hardware_store": CategorySpec(
         tags=(("shop", "hardware"),),
         hint="五金舖 / 五金店",
-        en=("hardware store", "hardware shop", "hardware supplier"),
-        zh=("五金舖", "五金店", "五金", "硬件"),
+        en=("hardware store", "hardware shop", "hardware supplier", "tool shop"),
+        zh=("五金舖", "五金店", "五金", "硬件", "工具店", "水電零件", "水電材料"),
     ),
     "hairdresser": CategorySpec(
         tags=(("shop", "hairdresser"),),
         hint="髮型屋 / 理髮店 / 髮廊",
-        en=("hairdresser", "barber", "hair salon", "barbershop"),
-        zh=("髮型屋", "理髮店", "髮廊", "美髮"),
+        en=("hairdresser", "barber", "hair salon", "barbershop", "hair shop", "haircut"),
+        zh=("髮型屋", "理髮店", "髮廊", "美髮", "頭髮", "剪髮"),
     ),
     "clothes_shop": CategorySpec(
         tags=(("shop", "clothes"),),
         hint="服裝店 / 衫舖",
         en=("clothes shop", "clothes store", "clothing shop", "clothing store", "apparel"),
-        zh=("服裝店", "衫舖"),
+        zh=("服裝", "服飾", "衫舖"),
     ),
     "electronics_shop": CategorySpec(
         tags=(("shop", "electronics"),),
         hint="電器店 / 電子產品店",
         en=("electronics shop", "electronics store", "gadget shop"),
-        zh=("電器店", "電子產品店"),
+        zh=("電器店", "電子產品", "電子店", "電子商店", "電子舖"),
     ),
     "department_store": CategorySpec(
         tags=(("shop", "department_store"),),
@@ -118,13 +118,13 @@ CATEGORIES: dict[str, CategorySpec] = {
         tags=(("shop", "variety_store"),),
         hint="雜貨店 / 日本城 / 多多",
         en=("variety store", "dollar store", "japan home", "don don"),
-        zh=("日本城", "多多", "雜貨店"),
+        zh=("日本城", "多多", "雜貨", "生活用品", "綜合商店"),
     ),
     "houseware_shop": CategorySpec(
         tags=(("shop", "houseware"),),
         hint="家品店 / 家居用品店",
         en=("houseware", "household goods", "home goods"),
-        zh=("家品店", "家居用品店"),
+        zh=("家品店", "家居用品", "家用品", "家居店", "家用嘢"),
     ),
     "beauty_shop": CategorySpec(
         tags=(("shop", "beauty"),),
@@ -136,19 +136,19 @@ CATEGORIES: dict[str, CategorySpec] = {
         tags=(("shop", "optician"),),
         hint="眼鏡舖",
         en=("optician", "eyewear", "glasses shop"),
-        zh=("眼鏡舖", "眼鏡店", "眼鏡"),
+        zh=("眼鏡舖", "眼鏡店", "眼鏡", "配鏡", "驗眼"),
     ),
     "shoe_shop": CategorySpec(
         tags=(("shop", "shoes"),),
         hint="鞋舖 / 鞋店",
-        en=("shoe shop", "shoe store"),
+        en=("shoe shop", "shoe store", "shoemaker", "cobbler"),
         zh=("鞋舖", "鞋店"),
     ),
     "greengrocer": CategorySpec(
         tags=(("shop", "greengrocer"),),
         hint="生果舖 / 蔬果店",
         en=("greengrocer", "fruit shop", "fruit store", "vegetable shop", "vegetable store"),
-        zh=("生果舖", "生果店", "菜舖", "蔬果店", "蔬菜", "水果", "生果"),
+        zh=("生果舖", "生果店", "菜舖", "蔬果", "蔬菜", "水果", "生果", "生鮮"),
     ),
     "bookstore": CategorySpec(
         tags=(("shop", "books"),),
@@ -160,20 +160,20 @@ CATEGORIES: dict[str, CategorySpec] = {
         tags=(("shop", "laundry"),),
         hint="洗衣店 / 乾洗店",
         en=("laundry", "laundromat", "laundrette", "dry cleaner", "dry cleaning"),
-        zh=("洗衣店", "乾洗店", "洗衣"),
+        zh=("洗衣店", "乾洗店", "洗衣", "洗衫"),
     ),
     "kiosk": CategorySpec(
         tags=(("shop", "kiosk"),),
         hint="報攤 / 小賣亭",
         en=("kiosk", "news stand", "newsagent"),
-        zh=("報攤", "小賣亭"),
+        zh=("報攤", "小賣亭", "信息亭", "資訊亭", "售賣亭"),
     ),
     "bookmaker": CategorySpec(
         tags=(("shop", "bookmaker"),),
         hint="馬會投注站 (off-course Jockey Club)",
         en=("bookmaker", "jockey club", "betting shop"),
         raw=(r"off-course",),
-        zh=("馬會", "投注站", "投注"),
+        zh=("馬會", "投注站", "投注", "博彩"),
     ),
     # --- amenities (workbook S531–S540) -----------------------------------
     "public_toilet": CategorySpec(
@@ -200,31 +200,40 @@ CATEGORIES: dict[str, CategorySpec] = {
         tags=(("amenity", "recycling"),),
         hint="回收站 / 回收箱 / 回收點",
         en=("recycling", "recycle bin", "recycling point"),
-        zh=("回收站", "回收箱", "回收點"),
+        zh=("回收", "垃圾分類"),
     ),
     "veterinarian": CategorySpec(
         tags=(("amenity", "veterinary"),),
         hint="獸醫 / 動物診所",
         en=("vet", "veterinarian", "animal clinic"),
-        zh=("獸醫", "動物診所"),
+        zh=("獸醫", "動物診所", "動物醫生", "寵物醫生"),
     ),
     "marketplace": CategorySpec(
         tags=(("amenity", "marketplace"),),
         hint="街市 / 菜市場",
         en=("wet market", "marketplace", "public market"),
+        # 市場 with a lookbehind so 超級市場 stays the supermarket's — bare
+        # 市場 would make categorize_all() see both and defer every turn.
+        raw=(r"(?<![級级])市場", r"(?<![級级])市场"),
         zh=("街市", "菜市場", "公開市場"),
     ),
     "drinking_water": CategorySpec(
         tags=(("amenity", "drinking_water"),),
         hint="飲水機 / 公眾飲水器",
         en=("drinking water", "water fountain", "water dispenser"),
-        zh=("飲水機", "飲水器"),
+        zh=("飲水", "飲用水"),
     ),
     "government_office": CategorySpec(
         tags=(("office", "government"),),
         hint="政府辦事處 / 民政事務處",
-        en=("government office", "district office", "home affairs"),
-        zh=("政府辦事處", "民政事務處"),
+        en=(
+            "government office",
+            "district office",
+            "home affairs",
+            "administrative building",
+            "government building",
+        ),
+        zh=("政府辦事處", "民政事務處", "政府機構", "政府部門", "行政大樓"),
     ),
     "dentist": CategorySpec(
         tags=(("amenity", "dentist"), ("healthcare", "dentist")),
@@ -237,8 +246,8 @@ CATEGORIES: dict[str, CategorySpec] = {
         tags=(("railway", "subway_entrance"),),
         hint="港鐵 / 地鐵出入口",
         raw=(
-            r"\bmtr\s+(?:entrance|exit|station)\b",
-            r"(?:港鐵|地鐵|mtr).{0,8}?(?:出入口|出口|入口)",
+            r"\bmtr\s+(?:entrances?|exits?|stations?)\b",
+            r"(?:港鐵|地鐵|mtr).{0,8}?(?:出入口|出口|入口|口)",
         ),
     ),
     "public_elevator": CategorySpec(
@@ -251,7 +260,7 @@ CATEGORIES: dict[str, CategorySpec] = {
         tags=(("amenity", "bench"), ("bench", "yes")),
         hint="公眾長凳 / 休憩座椅",
         en=("bench", "public seat"),
-        zh=("長凳", "休憩座椅", "公眾座椅"),
+        zh=("長凳", "長椅", "坐椅", "座椅"),
     ),
     "shelter": CategorySpec(
         tags=(("amenity", "shelter"), ("shelter", "yes")),
@@ -323,6 +332,20 @@ def _patterns() -> dict[str, Pattern[str]]:
     return {slug: _compile(slug, spec) for slug, spec in CATEGORIES.items()}
 
 
+def categorize_all(text: str) -> tuple[str, ...]:
+    """All slugs whose lexicon matches the text, in registry order.
+
+    Callers that need binary confidence (the classifier fast path) require
+    exactly one match — two or more means the turn is ambiguous and must
+    defer to the LLM. `categorize()` keeps the historic first-match-wins
+    contract for the chain-rules engine.
+    """
+    if not text:
+        return ()
+    haystack = text + "\n" + simplified_to_hk(text)
+    return tuple(slug for slug, pattern in _patterns().items() if pattern.search(haystack))
+
+
 def categorize(text: str) -> str | None:
     """Map free user text to a POI slug, or None if no category term matches.
 
@@ -330,13 +353,19 @@ def categorize(text: str) -> str | None:
     single Traditional lexicon covers both scripts. First match in registry
     order wins (the registry is ordered most-specific-first).
     """
-    if not text:
-        return None
-    haystack = text + "\n" + simplified_to_hk(text)
-    for slug, pattern in _patterns().items():
-        if pattern.search(haystack):
-            return slug
-    return None
+    slugs = categorize_all(text)
+    return slugs[0] if slugs else None
+
+
+def strip_category_terms(text: str, slug: str) -> str:
+    """Blank out the slug's matched lexicon terms (raw + Simplified-normalised).
+
+    Used by the classifier's location extractor: removing the category words
+    first means the remaining text is mostly the location phrase, so CJK
+    extraction (which has no word boundaries) can't swallow the category term.
+    """
+    pattern = _patterns()[slug]
+    return pattern.sub(" ", text + "\n" + simplified_to_hk(text))
 
 
 __all__ = [
@@ -344,5 +373,7 @@ __all__ = [
     "POI_CATEGORY_SLUGS",
     "CategorySpec",
     "categorize",
+    "categorize_all",
     "category_field_description",
+    "strip_category_terms",
 ]

@@ -93,6 +93,16 @@ class Settings(BaseSettings):
             "the next nightly cycle. 0 disables retries."
         ),
     )
+    poi_fast_path_enabled: bool = Field(
+        default=False,
+        description=(
+            "Skip the LLM decide hop for unambiguous POI-find turns: the "
+            "deterministic classifier extracts category + location, the "
+            "orchestrator runs address_lookup → find_poi directly, then a "
+            "single synthesis hop. The A/B switch — stays off until the "
+            "calibrated sweep shows no accuracy regression (DESIGN_1hop_latency)."
+        ),
+    )
     poi_refresh_backoff_base_s: float = Field(
         default=5.0,
         ge=0.5,
