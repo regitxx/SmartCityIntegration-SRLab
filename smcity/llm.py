@@ -175,6 +175,7 @@ def _build_kwargs(
     messages: list[dict[str, Any]],
     *,
     tools: list[dict[str, Any]] | None,
+    tool_choice: Literal["auto", "required"],
     temperature: float,
     parallel_tool_calls: bool,
     session_id: str | None,
@@ -187,7 +188,7 @@ def _build_kwargs(
     }
     if tools:
         kwargs["tools"] = tools
-        kwargs["tool_choice"] = "auto"
+        kwargs["tool_choice"] = tool_choice
         kwargs["parallel_tool_calls"] = parallel_tool_calls
     if session_id:
         # llama.cpp + LM Studio route `user` to a per-slot KV cache.
@@ -199,6 +200,7 @@ async def chat(
     messages: list[dict[str, Any]],
     *,
     tools: list[dict[str, Any]] | None = None,
+    tool_choice: Literal["auto", "required"] = "auto",
     temperature: float = 0.0,
     parallel_tool_calls: bool = True,
     session_id: str | None = None,
@@ -213,6 +215,7 @@ async def chat(
     kwargs = _build_kwargs(
         messages,
         tools=tools,
+        tool_choice=tool_choice,
         temperature=temperature,
         parallel_tool_calls=parallel_tool_calls,
         session_id=session_id,
@@ -252,6 +255,7 @@ async def chat_stream(
     messages: list[dict[str, Any]],
     *,
     tools: list[dict[str, Any]] | None = None,
+    tool_choice: Literal["auto", "required"] = "auto",
     temperature: float = 0.0,
     parallel_tool_calls: bool = True,
     session_id: str | None = None,
@@ -266,6 +270,7 @@ async def chat_stream(
     kwargs = _build_kwargs(
         messages,
         tools=tools,
+        tool_choice=tool_choice,
         temperature=temperature,
         parallel_tool_calls=parallel_tool_calls,
         session_id=session_id,

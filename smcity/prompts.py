@@ -181,26 +181,59 @@ def cantonese_style_block() -> str:
 
 def locale_hint(d: LangDetection, *, forced: bool) -> str:
     tone = "forced by the user" if forced else "detected"
+    language = reply_language_name(d)
     return (
         f"User language ({tone}): primary_lang={d.primary_lang!r} "
         f"script={d.script!r} tts_locale={d.tts_locale!r}. "
-        "REPLY IN THIS LANGUAGE. Tool output will contain fields in multiple "
+        f"REPLY IN {language.upper()}. The ISO code above is metadata; the "
+        f"required natural-language output is {language}. Tool output will contain "
+        "fields in multiple "
         "languages (name_en, name_tc, name_sc) — those are DATA, not a cue to "
         "switch languages."
     )
 
 
 def language_stick_reminder(d: LangDetection) -> str:
+    language = reply_language_name(d)
     extra = ""
     if d.primary_lang == "yue":
         extra = " Write natural Cantonese (嘅/喺/咗/冇/佢/唔), NOT formal Mandarin."
+    elif d.primary_lang == "eng":
+        extra = " Write every prose sentence in plain English, not Chinese."
     return (
-        f"Now synthesise the final reply. REPLY LANGUAGE IS {d.primary_lang!r}. "
+        f"Now synthesise the final reply. REPLY LANGUAGE IS {language.upper()} "
+        f"({d.primary_lang!r}, {d.tts_locale}). "
         "Do not switch to Chinese or English because the tool output contained "
         "bilingual fields. Pick fields in the user's language from the tool "
         f"response and form natural prose in that language only.{extra} "
         "Do NOT write tool names, brackets, or JSON in the reply."
     )
+
+
+_REPLY_LANGUAGE_NAMES: dict[str, str] = {
+    "yue": "Cantonese",
+    "zho": "Chinese",
+    "eng": "English",
+    "jpn": "Japanese",
+    "kor": "Korean",
+    "fra": "French",
+    "deu": "German",
+    "spa": "Spanish",
+    "tha": "Thai",
+    "tgl": "Tagalog",
+    "ind": "Indonesian",
+    "vie": "Vietnamese",
+}
+
+
+def reply_language_name(d: LangDetection) -> str:
+    """Return the human-readable output language used in model instructions.
+
+    Models do not always treat ISO-639-3 codes such as ``eng`` as strongly as
+    a plain language name. Keep the code in prompt metadata, but state the
+    actual language name whenever instructing synthesis.
+    """
+    return _REPLY_LANGUAGE_NAMES.get(d.primary_lang, d.primary_lang)
 
 
 def fast_path_synthesis_hint(intent: str, serialised_results: str, d: LangDetection) -> str:

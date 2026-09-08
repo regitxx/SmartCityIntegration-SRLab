@@ -40,6 +40,7 @@ from smcity.prompts import (
     fast_path_synthesis_hint,
     language_stick_reminder,
     locale_hint,
+    reply_language_name,
 )
 from smcity.schemas import (
     Citation,
@@ -250,6 +251,7 @@ class Orchestrator:
                 first = await chat(
                     messages,
                     tools=self._registry.openai_schemas(),
+                    tool_choice="required",
                     parallel_tool_calls=True,
                     session_id=req.session_id,
                     known_tool_names=set(self._registry.names()),
@@ -320,6 +322,7 @@ class Orchestrator:
                         retry = await chat(
                             retry_messages,
                             tools=self._registry.openai_schemas(),
+                            tool_choice="required",
                             parallel_tool_calls=True,
                             session_id=req.session_id,
                             known_tool_names=set(self._registry.names()),
@@ -793,48 +796,76 @@ class Orchestrator:
         session_id: str,
         emit: EventEmitter,
     ) -> str:
-        """Run synthesis invariants over `reply_text`. If a violation fires,
-        append the corrective system message and re-prompt the LLM once
-        (non-streaming). Return the retry text on success, the original on
-        any failure — we never make the reply worse by trying to fix it.
+        """Run synthesis invariants over `reply_text`.
+
+        Re-prompt and revalidate up to three times. Persistent language drift
+        moves to an isolated translation pass so bilingual tool payloads and
+        conversation history cannot pull the output back into another script.
 
         Sibling to the chain-rules engine: chain_rules guards the tool-call
         stage; this guards the synthesis stage. Both are structural.
         """
-        violation = apply_invariants(reply_text, tool_results, detection)
-        if violation is None:
-            return reply_text
+        candidate = reply_text
+        # The first retry retains the full tool context so data-denial and
+        # language failures can be repaired without losing facts. If the model
+        # still returns the wrong language, later attempts deliberately remove
+        # the bilingual tool/history context and perform translation only.
+        # Every candidate is revalidated before it can be returned.
+        for attempt in range(3):
+            violation = apply_invariants(candidate, tool_results, detection)
+            if violation is None:
+                return candidate
 
-        emit(
-            TurnEvent(
-                type="invariant.violated",
-                data={
-                    "name": violation.name,
-                    "kind": violation.kind,
-                    "tool": violation.tool_name,
-                    "records": violation.record_count,
-                },
-            )
-        )
-
-        retry_messages = [
-            *messages,
-            {"role": "assistant", "content": reply_text},
-            {"role": "system", "content": violation.corrective_prompt},
-        ]
-        try:
-            with get_tracer("smcity.orchestrator").start_as_current_span(
-                "llm.chat.invariant_retry"
-            ):
-                retry = await chat(
-                    retry_messages,
-                    session_id=session_id,
-                    known_tool_names=set(self._registry.names()),
+            emit(
+                TurnEvent(
+                    type="invariant.violated",
+                    data={
+                        "name": violation.name,
+                        "kind": violation.kind,
+                        "tool": violation.tool_name,
+                        "records": violation.record_count,
+                        "attempt": attempt + 1,
+                    },
                 )
-        except LLMError:
-            return reply_text
-        retry_text = (retry.text or "").strip()
-        return retry_text or reply_text
+            )
+
+            if attempt > 0 and violation.kind == "wrong_language":
+                retry_messages = _strict_language_rewrite_messages(candidate, detection)
+            else:
+                retry_messages = [
+                    *messages,
+                    {"role": "assistant", "content": candidate},
+                    {"role": "system", "content": violation.corrective_prompt},
+                ]
+            try:
+                with get_tracer("smcity.orchestrator").start_as_current_span(
+                    "llm.chat.invariant_retry"
+                ):
+                    retry = await chat(
+                        retry_messages,
+                        session_id=session_id,
+                        known_tool_names=set(self._registry.names()),
+                    )
+            except LLMError:
+                return candidate
+            retry_text = _normalise_whitespace((retry.text or "").strip())
+            if retry_text:
+                candidate = retry_text
+
+        # Do not knowingly ship a still-wrong-language answer after all
+        # repair attempts. English is the UI's default Latin-language target
+        # and the reported failure mode; keep this final guard deterministic.
+        remaining = apply_invariants(candidate, tool_results, detection)
+        if (
+            remaining is not None
+            and remaining.kind == "wrong_language"
+            and detection.primary_lang == "eng"
+        ):
+            return (
+                "I retrieved the requested data, but could not format the answer in English. "
+                "Please try again."
+            )
+        return candidate
 
     def _append_trace_and_citations(
         self,
@@ -932,6 +963,33 @@ def _maybe_polish(text: str, detection: LangDetection) -> str:
     if detection.primary_lang != "yue":
         return text
     return polish_cantonese(text)
+
+
+def _strict_language_rewrite_messages(draft: str, detection: LangDetection) -> list[dict[str, Any]]:
+    """Build a context-isolated translation request for a stubborn draft.
+
+    Bilingual tool payloads and earlier conversation turns are intentionally
+    excluded: they are the strongest observed source of language drift.
+    """
+    language = reply_language_name(detection)
+    script_rule = ""
+    if detection.primary_lang == "eng":
+        script_rule = " Use English prose and no Chinese characters."
+    elif detection.primary_lang == "yue":
+        script_rule = " Use natural written Hong Kong Cantonese, not formal Mandarin."
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a deterministic translation-only postprocessor. "
+                f"Translate the supplied draft into {language} ({detection.tts_locale}). "
+                "Preserve every fact, number, place, route step, and caveat. "
+                "Do not answer afresh, add advice, remove information, call tools, "
+                f"or include commentary. Output only the translated answer.{script_rule}"
+            ),
+        },
+        {"role": "user", "content": draft},
+    ]
 
 
 _SRC_LINE_RE = re.compile(r"(?im)^\s*src\s*[:：][^\n]*\n?")  # noqa: RUF001

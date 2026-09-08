@@ -208,6 +208,27 @@ async def test_forced_locale_override_is_respected(
 
 
 @pytest.mark.asyncio
+async def test_full_path_requires_a_structured_tool_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen_tool_choices: list[str | None] = []
+
+    async def _capture(messages: list[dict[str, Any]], **kwargs: Any) -> LLMReply:
+        seen_tool_choices.append(kwargs.get("tool_choice"))
+        return LLMReply(text="", tool_calls=[], usage={}, elapsed_ms=20)
+
+    from smcity import orchestrator as orch_module
+
+    monkeypatch.setattr(orch_module, "chat", _capture)
+
+    store = SessionStore(tmp_path / "sessions.sqlite3")
+    orch = Orchestrator(store)
+    await orch.handle_turn(TurnRequest(session_id="required-tool-1", text="Tell me about CityU"))
+
+    assert seen_tool_choices == ["required"]
+
+
+@pytest.mark.asyncio
 @respx.mock
 async def test_chain_rule_auto_dispatches_poi_followup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -413,6 +434,66 @@ async def test_synthesis_invariant_retries_on_data_denial(
     assert "Dr Chan" in resp.text
     assert "couldn't find" not in resp.text.lower()
     assert "no data" not in resp.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_wrong_language_retry_is_revalidated_and_isolates_translation_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: gpt-oss may ignore the first English corrective prompt."""
+    still_chinese = LLMReply(
+        text="從香港理工大學步行去紅磡站，然後搭東鐵線到九龍塘站。",
+        tool_calls=[],
+        usage={},
+        elapsed_ms=20,
+    )
+    english = LLMReply(
+        text=(
+            "Walk from Hong Kong Polytechnic University to Hung Hom Station, "
+            "then take the East Rail Line to Kowloon Tong Station."
+        ),
+        tool_calls=[],
+        usage={},
+        elapsed_ms=20,
+    )
+    calls: list[list[dict[str, Any]]] = []
+
+    async def fake_chat(messages: list[dict[str, Any]], **_: Any) -> LLMReply:
+        calls.append(messages)
+        return [still_chinese, english][len(calls) - 1]
+
+    from smcity import orchestrator as orch_module
+    from smcity.langrouter.detect import LangDetection
+
+    monkeypatch.setattr(orch_module, "chat", fake_chat)
+    orch = Orchestrator(SessionStore(tmp_path / "sessions.sqlite3"))
+    detection = LangDetection(
+        primary_lang="eng",
+        script="Latin",
+        confidence=1.0,
+        method="forced",
+        tts_locale="en-US",
+    )
+    original = "從香港理工大學步行去紅磡站，然後搭東鐵線到九龍塘站，全程約 18 分鐘。"
+    events: list[Any] = []
+
+    result = await orch._maybe_retry_for_invariants(
+        original,
+        [{"role": "system", "content": "bilingual tool context"}],
+        [],
+        detection,
+        "language-regression",
+        events.append,
+    )
+
+    assert result.startswith("Walk from Hong Kong Polytechnic University")
+    assert len(calls) == 2
+    assert calls[1][0]["role"] == "system"
+    assert "translation-only" in calls[1][0]["content"]
+    assert "bilingual tool context" not in str(calls[1])
+    violations = [event for event in events if event.type == "invariant.violated"]
+    assert len(violations) == 2
+    assert all(event.data["kind"] == "wrong_language" for event in violations)
 
 
 @pytest.mark.asyncio
